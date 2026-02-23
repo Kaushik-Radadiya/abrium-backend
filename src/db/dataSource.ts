@@ -20,6 +20,20 @@ export const AppDataSource = new DataSource({
   ],
   synchronize: false,
   logging: false,
+  // Keep a stable pool of connections to avoid reconnecting on every request.
+  // Render's managed Postgres recycles idle connections aggressively, so we
+  // use keepAlive + a short idle timeout to evict stale connections before
+  // Render does it for us (prevents "terminating connection due to idle" errors).
+  poolSize: 5,
+  extra: {
+    // TCP keepalive so the OS sends probes on idle connections
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    // How long a client can sit idle in the pool before being destroyed
+    idleTimeoutMillis: 30_000,
+    // Max time to wait for a new connection to be established
+    connectionTimeoutMillis: 5_000,
+  },
 })
 
 let initializationPromise: Promise<DataSource> | null = null
