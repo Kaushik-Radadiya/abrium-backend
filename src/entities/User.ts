@@ -1,5 +1,5 @@
-import { Column, Entity, OneToMany, PrimaryColumn } from 'typeorm'
-import { UserWallet } from './UserWallet.js'
+import { Column, Entity, OneToMany, PrimaryColumn, type Relation } from 'typeorm'
+import type { UserWallet } from './UserWallet.js'
 
 @Entity({ name: 'users' })
 export class User {
@@ -35,6 +35,6 @@ export class User {
   })
   updatedAt!: Date
 
-  @OneToMany(() => UserWallet, (wallet) => wallet.user)
-  wallets!: UserWallet[]
+  @OneToMany('UserWallet', 'user')
+  wallets!: Relation<UserWallet[]>
 }
