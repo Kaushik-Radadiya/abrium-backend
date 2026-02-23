@@ -1,4 +1,11 @@
-import { Column, Entity, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm'
+import {
+  Column,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryColumn,
+  type Relation,
+} from 'typeorm'
 import { User } from './User.js'
 
 @Entity({ name: 'user_wallets' })
@@ -38,5 +45,5 @@ export class UserWallet {
     referencedColumnName: 'dynamicUserId',
     foreignKeyConstraintName: 'fk_user_wallets_dynamic_user_id',
   })
-  user!: User
+  user!: Relation<User>
 }
