@@ -1,11 +1,21 @@
-import { readFile } from 'node:fs/promises'
-import { query, pool } from '../db/pool.js'
+import { closeDataSource, initializeDataSource } from '../db/dataSource.js'
 
 async function run() {
-  const sql = await readFile(new URL('../../sql/schema_v0.sql', import.meta.url), 'utf8')
-  await query(sql)
+  const dataSource = await initializeDataSource()
+  const appliedMigrations = await dataSource.runMigrations({ transaction: 'all' })
+
+  if (appliedMigrations.length === 0) {
+    // eslint-disable-next-line no-console
+    console.log('No pending migrations')
+    return
+  }
+
   // eslint-disable-next-line no-console
-  console.log('schema_v0.sql applied successfully')
+  console.log(
+    `Applied ${appliedMigrations.length} migration(s): ${appliedMigrations
+      .map((migration) => migration.name)
+      .join(', ')}`
+  )
 }
 
 run()
@@ -14,6 +24,4 @@ run()
     console.error('migration failed', error)
     process.exitCode = 1
   })
-  .finally(async () => {
-    await pool.end()
-  })
+  .finally(closeDataSource)

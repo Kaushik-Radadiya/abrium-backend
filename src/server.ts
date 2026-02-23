@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { env } from './config/env.js';
+import { initializeDataSource } from './db/dataSource.js';
 import { apiRouter } from './routes/index.js';
 import { handleDynamicWebhook } from './routes/dynamicWebhook.js';
 import { errorResponse } from './utils/response.js';
@@ -43,7 +44,17 @@ app.use(
   },
 );
 
-app.listen(env.PORT, () => {
+async function bootstrap() {
+  await initializeDataSource();
+
+  app.listen(env.PORT, () => {
+    // eslint-disable-next-line no-console
+    console.log(`abrium-backend listening on :${env.PORT}`);
+  });
+}
+
+bootstrap().catch((error) => {
   // eslint-disable-next-line no-console
-  console.log(`abrium-backend listening on :${env.PORT}`);
+  console.error('Failed to start server', error);
+  process.exit(1);
 });

@@ -1,4 +1,5 @@
-import { query } from '../db/pool.js'
+import { AppDataSource, initializeDataSource } from '../db/dataSource.js'
+import { RiskAssessment } from '../entities/RiskAssessment.js'
 import type { RiskEvaluation } from '../types/security.js'
 
 type PersistRiskAssessmentInput = {
@@ -9,26 +10,16 @@ type PersistRiskAssessmentInput = {
 }
 
 export async function persistRiskAssessment(input: PersistRiskAssessmentInput) {
-  await query(
-    `
-    insert into risk_assessments (
-      chain_id,
-      token_address,
-      score,
-      decision,
-      flags,
-      reasons,
-      provider_payload
-    ) values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb)
-    `,
-    [
-      input.chainId,
-      input.tokenAddress.toLowerCase(),
-      input.evaluation.score,
-      input.evaluation.decision,
-      JSON.stringify(input.evaluation.flags),
-      JSON.stringify(input.evaluation.reasons),
-      JSON.stringify(input.providerPayload),
-    ]
-  )
+  await initializeDataSource()
+  const repository = AppDataSource.getRepository(RiskAssessment)
+
+  await repository.insert({
+    chainId: input.chainId,
+    tokenAddress: input.tokenAddress.toLowerCase(),
+    score: input.evaluation.score,
+    decision: input.evaluation.decision,
+    flags: input.evaluation.flags,
+    reasons: input.evaluation.reasons,
+    providerPayload: input.providerPayload,
+  })
 }

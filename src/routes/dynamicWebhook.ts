@@ -1,7 +1,10 @@
 import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { env } from '../config/env.js';
-import { pool } from '../db/pool.js';
+import { AppDataSource, initializeDataSource } from '../db/dataSource.js';
+import { User } from '../entities/User.js';
+import { UserWallet } from '../entities/UserWallet.js';
+import { WebhookEvent } from '../entities/WebhookEvent.js';
 import {
   errorResponse,
   failResponse,
@@ -225,22 +228,35 @@ export async function handleDynamicWebhook(req: Request, res: Response) {
       dynamicUserId: userData.dynamicUserId,
     });
 
-    const client = await pool.connect();
+    await initializeDataSource();
+    const queryRunner = AppDataSource.createQueryRunner();
+    await queryRunner.connect();
+
     try {
-      await client.query('begin');
+      await queryRunner.startTransaction();
 
-      const eventWrite = await client.query<{ event_id: string }>(
-        `
-        insert into webhook_events (event_id, event_type, payload)
-        values ($1, $2, $3::jsonb)
-        on conflict (event_id) do nothing
-        returning event_id
-        `,
-        [eventId, eventType, JSON.stringify(parsed)],
-      );
+      const userRepository = queryRunner.manager.getRepository(User);
+      const userWalletRepository = queryRunner.manager.getRepository(UserWallet);
 
-      if (eventWrite.rowCount === 0) {
-        await client.query('commit');
+      const eventWrite = await queryRunner.manager
+        .createQueryBuilder()
+        .insert()
+        .into(WebhookEvent)
+        .values({
+          eventId,
+          eventType,
+          payload: parsed,
+        })
+        .onConflict(`("event_id") DO NOTHING`)
+        .returning(['event_id'])
+        .execute();
+
+      const wasInserted =
+        eventWrite.identifiers.length > 0 ||
+        (Array.isArray(eventWrite.raw) && eventWrite.raw.length > 0);
+
+      if (!wasInserted) {
+        await queryRunner.commitTransaction();
         return successResponse(res, 'Webhook already processed', 200, {
           ok: true,
           duplicate: true,
@@ -252,18 +268,14 @@ export async function handleDynamicWebhook(req: Request, res: Response) {
         let nextEmail = userData.email;
 
         if (nextEmail) {
-          const existingEmailOwner = await client.query<{ dynamic_user_id: string }>(
-            `
-            select dynamic_user_id
-            from users
-            where lower(email) = lower($1)
-            limit 1
-            `,
-            [nextEmail],
-          );
+          const existingEmailOwner = await userRepository
+            .createQueryBuilder('user')
+            .select('user.dynamicUserId', 'dynamicUserId')
+            .where('lower(user.email) = lower(:email)', { email: nextEmail })
+            .limit(1)
+            .getRawOne<{ dynamicUserId: string }>();
 
-          const ownerDynamicUserId =
-            existingEmailOwner.rows[0]?.dynamic_user_id ?? null;
+          const ownerDynamicUserId = existingEmailOwner?.dynamicUserId ?? null;
 
           if (
             ownerDynamicUserId &&
@@ -283,127 +295,81 @@ export async function handleDynamicWebhook(req: Request, res: Response) {
           }
         }
 
-        const existingUser = await client.query<{ dynamic_user_id: string }>(
-          `
-          select dynamic_user_id
-          from users
-          where dynamic_user_id = $1
-          limit 1
-          `,
-          [userData.dynamicUserId],
-        );
+        const existingUser = await userRepository.findOne({
+          where: { dynamicUserId: userData.dynamicUserId },
+        });
 
-        if (existingUser.rowCount === 0) {
-          await client.query(
-            `
-            insert into users (
-              dynamic_user_id,
-              email,
-              wallet_address,
-              auth_provider,
-              is_deleted,
-              deleted_at
-            ) values ($1, $2, $3, $4, false, null)
-            on conflict (dynamic_user_id)
-            do update set
-              email = coalesce(excluded.email, users.email),
-              wallet_address = coalesce(excluded.wallet_address, users.wallet_address),
-              auth_provider = coalesce(excluded.auth_provider, users.auth_provider),
-              is_deleted = false,
-              deleted_at = null,
-              updated_at = now()
-            `,
-            [
-              userData.dynamicUserId,
-              nextEmail,
+        if (!existingUser) {
+          await userRepository.save(
+            userRepository.create({
+              dynamicUserId: userData.dynamicUserId,
+              email: nextEmail,
               walletAddress,
-              userData.authProvider,
-            ],
+              authProvider: userData.authProvider,
+              isDeleted: false,
+              deletedAt: null,
+            }),
           );
         } else {
-          await client.query(
-            `
-            update users
-            set
-              email = coalesce($2, users.email),
-              wallet_address = coalesce($3, users.wallet_address),
-              auth_provider = coalesce($4, users.auth_provider),
-              is_deleted = false,
-              deleted_at = null,
-              updated_at = now()
-            where dynamic_user_id = $1
-            `,
-            [
-              userData.dynamicUserId,
-              nextEmail,
-              walletAddress,
-              userData.authProvider,
-            ],
-          );
+          if (nextEmail !== null) {
+            existingUser.email = nextEmail;
+          }
+          if (walletAddress !== null) {
+            existingUser.walletAddress = walletAddress;
+          }
+          if (userData.authProvider !== null) {
+            existingUser.authProvider = userData.authProvider;
+          }
+          existingUser.isDeleted = false;
+          existingUser.deletedAt = null;
+          existingUser.updatedAt = new Date();
+
+          await userRepository.save(existingUser);
         }
 
         if (eventType.includes('user.deleted')) {
-
-
-          await client.query(
-            `
-            update users
-            set is_deleted = true, deleted_at = now(), updated_at = now()
-            where dynamic_user_id = $1
-            `,
-            [userData.dynamicUserId],
+          await userRepository.update(
+            { dynamicUserId: userData.dynamicUserId },
+            {
+              isDeleted: true,
+              deletedAt: new Date(),
+              updatedAt: new Date(),
+            },
           );
 
-          await client.query(
-            `delete from user_wallets where dynamic_user_id = $1`,
-            [userData.dynamicUserId],
-          );
+          await userWalletRepository.delete({
+            dynamicUserId: userData.dynamicUserId,
+          });
         } else if (eventType.includes('wallet.unlinked')) {
           for (const wallet of userData.wallets) {
-            await client.query(
-              `
-              delete from user_wallets
-              where dynamic_user_id = $1 and wallet_address = $2
-              `,
-              [userData.dynamicUserId, wallet.address],
-            );
+            await userWalletRepository.delete({
+              dynamicUserId: userData.dynamicUserId,
+              walletAddress: wallet.address,
+            });
           }
         } else {
           for (const wallet of userData.wallets) {
-            await client.query(
-              `
-              insert into user_wallets (
-                dynamic_user_id,
-                wallet_address,
-                chain,
-                provider,
-                is_primary
-              ) values ($1, $2, $3, $4, $5)
-              on conflict (dynamic_user_id, wallet_address)
-              do update set
-                chain = excluded.chain,
-                provider = excluded.provider,
-                is_primary = excluded.is_primary,
-                updated_at = now()
-              `,
-              [
-                userData.dynamicUserId,
-                wallet.address,
-                wallet.chain ?? null,
-                wallet.provider ?? null,
-                wallet.isPrimary ?? false,
-              ],
+            await userWalletRepository.upsert(
+              {
+                dynamicUserId: userData.dynamicUserId,
+                walletAddress: wallet.address,
+                chain: wallet.chain ?? null,
+                provider: wallet.provider ?? null,
+                isPrimary: wallet.isPrimary ?? false,
+                updatedAt: new Date(),
+              },
+              ['dynamicUserId', 'walletAddress'],
             );
           }
         }
       }
 
-      await client.query('commit');
+      await queryRunner.commitTransaction();
     } catch (error) {
-      await client.query('rollback');
+      await queryRunner.rollbackTransaction();
       throw error;
     } finally {
-      client.release();
+      await queryRunner.release();
     }
 
     return successResponse(res, 'Webhook processed successfully', 200, {

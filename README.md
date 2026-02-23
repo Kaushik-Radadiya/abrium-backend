@@ -8,7 +8,7 @@ Express + Postgres backend for token risk checks and Dynamic webhook-based user 
 - Idempotent webhook processing (`webhook_events` table)
 - User + wallet sync from webhook events (`users`, `user_wallets` tables)
 - GoPlus token security wrapper + Risk Policy Engine v0 (ALLOW/WARN/BLOCK)
-- Postgres schema v0 and migration script
+- Full TypeORM stack (DataSource, entities, repositories, migrations)
 
 ## Setup
 
@@ -16,10 +16,27 @@ Express + Postgres backend for token risk checks and Dynamic webhook-based user 
 2. Set `DYNAMIC_WEBHOOK_SECRET` from Dynamic dashboard.
 3. Install packages:
    - `npm install`
-4. Run migration:
+4. Run migrations:
    - `npm run migrate`
 5. Start dev server:
    - `npm run dev`
+
+## Database Commands
+
+- `npm run migrate`
+  - Runs pending TypeORM migrations.
+- `npm run migration:show`
+  - Shows pending/applied TypeORM migrations.
+- `npm run migration:generate -- <name>`
+  - Auto-generates a migration from entity changes.
+  - Example: `npm run migration:generate -- add_risk_indexes`
+- `npm run migration:create -- <name>`
+  - Creates an empty migration file.
+  - Example: `npm run migration:create -- manual_hotfix`
+- `npm run migration:revert`
+  - Reverts the last applied migration.
+- `npm run db:reset`
+  - Drops and recreates `public` schema, then runs all TypeORM migrations.
 
 ## API
 
