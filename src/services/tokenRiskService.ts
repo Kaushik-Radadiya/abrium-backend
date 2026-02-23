@@ -9,8 +9,14 @@ import { persistRiskAssessment } from '../repositories/riskAssessmentRepository.
 function buildProviderUnavailableEvaluation(
   chainId: number,
   tokenAddress: string,
-  detail: string
+  detail: string,
+  providerMessage: string | null
 ): RiskEvaluation {
+  const normalizedProviderMessage =
+    typeof providerMessage === 'string' && providerMessage.trim()
+      ? providerMessage.trim()
+      : null
+
   return {
     decision: 'WARN',
     score: 50,
@@ -36,6 +42,7 @@ function buildProviderUnavailableEvaluation(
     alertLevel: 'warning',
     alertTitle: 'Risk data unavailable',
     alertMessage:
+      normalizedProviderMessage ??
       'Could not fetch token risk data from provider. Proceed with caution.',
   }
 }
@@ -80,7 +87,8 @@ export async function assessTokenRisk(input: {
     evaluation = buildProviderUnavailableEvaluation(
       input.chainId,
       input.tokenAddress,
-      detail
+      detail,
+      providerMessage
     )
   }
 
