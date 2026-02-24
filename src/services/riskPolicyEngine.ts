@@ -8,10 +8,6 @@ type GoPlusDexItem = {
 
 type GoPlusRisk = Record<string, unknown> & {
   is_honeypot?: string
-  is_open_source?: string
-  is_proxy?: string
-  selfdestruct?: string
-  owner_change_balance?: string
   hidden_owner?: string
   is_mintable?: string
   slippage_modifiable?: string
@@ -25,6 +21,8 @@ type GoPlusRisk = Record<string, unknown> & {
 }
 
 const BASE_SCORE = 100
+const WARN_MANDATORY_FLAG_COUNT = 1
+const BLOCK_MANDATORY_FLAG_COUNT = 2
 const HIGH_LIQUIDITY_USD = 100_000
 
 const EMPTY_OWNER_ADDRESSES = new Set([
@@ -65,13 +63,6 @@ function isTruthyFlag(value: unknown) {
   if (typeof value !== 'string') return false
   const normalized = value.trim().toLowerCase()
   return normalized === 'true' || normalized === 'yes'
-}
-
-function isFalseFlag(value: unknown) {
-  if (value === false || value === 0 || value === '0') return true
-  if (typeof value !== 'string') return false
-  const normalized = value.trim().toLowerCase()
-  return normalized === 'false' || normalized === 'no'
 }
 
 function formatUsd(value: number) {
@@ -145,36 +136,9 @@ function assessGoPlusRisk(risk: GoPlusRisk) {
     badges.push({ id, label, detail, level: 'info' })
   }
 
+  // Mandatory critical checks.
   if (isTruthyFlag(risk.is_honeypot)) {
     addCritical('is_honeypot', 'Honeypot', 'Honeypot behavior detected.')
-  }
-  if (isFalseFlag(risk.is_open_source)) {
-    addCritical(
-      'is_open_source_false',
-      'Closed Source',
-      'Contract source is not open or verified.',
-    )
-  }
-  if (isTruthyFlag(risk.is_proxy)) {
-    addCritical(
-      'is_proxy',
-      'Proxy Contract',
-      'Contract is proxy-upgradable and can change behavior.',
-    )
-  }
-  if (isTruthyFlag(risk.selfdestruct)) {
-    addCritical(
-      'selfdestruct',
-      'Self Destruct',
-      'Contract can be self-destructed by privileged role.',
-    )
-  }
-  if (isTruthyFlag(risk.owner_change_balance)) {
-    addCritical(
-      'owner_change_balance',
-      'Owner Balance Control',
-      'Owner can change holder balances.',
-    )
   }
   if (buyTaxPercent !== null && buyTaxPercent >= 100) {
     addCritical(
@@ -236,7 +200,6 @@ function assessGoPlusRisk(risk: GoPlusRisk) {
       30,
     )
   }
-
   if (buyTaxPercent !== null && buyTaxPercent >= 20 && buyTaxPercent < 100) {
     addWarning(
       'buy_tax_high',
@@ -299,46 +262,43 @@ function assessGoPlusRisk(risk: GoPlusRisk) {
 
 export function evaluateGoPlusRisk(risk: GoPlusRisk): RiskEvaluation {
   const assessment = assessGoPlusRisk(risk)
+  const mandatoryFlagCount = assessment.criticalFlags.length
 
-  if (assessment.criticalFlags.length > 0) {
-    return {
-      ...assessment,
-      decision: 'BLOCK',
-      alertLevel: 'error',
-      alertTitle: 'Token blocked by policy',
-      alertMessage: assessment.reasons[0] ?? 'Critical token risks found.',
-    }
-  }
-
-  if (assessment.warningFlags.length === 0) {
-    return {
-      ...assessment,
-      decision: 'ALLOW',
-      alertLevel: 'info',
-      alertTitle: 'Token check complete',
-      alertMessage:
-        assessment.trustSignals.length > 0
-          ? 'No major token risks found. Trust signals detected.'
-          : 'No major token risks found.',
-    }
-  }
-
-  if (assessment.score <= 30) {
+  if (mandatoryFlagCount >= BLOCK_MANDATORY_FLAG_COUNT) {
     return {
       ...assessment,
       decision: 'BLOCK',
       alertLevel: 'error',
       alertTitle: 'Token blocked by policy',
       alertMessage:
-        assessment.reasons[0] ?? 'Risk score is below the policy threshold.',
+        assessment.reasons[0] ??
+        `Found ${mandatoryFlagCount} mandatory risk flags.`,
+    }
+  }
+
+  if (
+    mandatoryFlagCount >= WARN_MANDATORY_FLAG_COUNT ||
+    assessment.warningFlags.length > 0
+  ) {
+    return {
+      ...assessment,
+      decision: 'WARN',
+      alertLevel: 'warning',
+      alertTitle: 'Proceed with caution',
+      alertMessage:
+        assessment.reasons[0] ??
+        'Warning or mandatory risk flags found.',
     }
   }
 
   return {
     ...assessment,
-    decision: 'WARN',
-    alertLevel: 'warning',
-    alertTitle: 'Proceed with caution',
-    alertMessage: assessment.reasons[0] ?? 'Potential token risks detected.',
+    decision: 'ALLOW',
+    alertLevel: 'info',
+    alertTitle: 'Token check complete',
+    alertMessage:
+      assessment.trustSignals.length > 0
+        ? 'No major token risks found. Trust signals detected.'
+        : 'No major token risks found.',
   }
 }
