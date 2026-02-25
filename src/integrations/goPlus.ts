@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { env } from '../config/env.js';
 
 type GoPlusRiskPayload = Record<string, unknown>;
@@ -6,6 +7,21 @@ type GoPlusResponse = {
   code?: number | string;
   message?: string;
   result?: Record<string, GoPlusRiskPayload> | null;
+};
+
+type GoPlusSdkClient = {
+  config: (appKey: string, appSecret: string, timeout?: number) => void;
+  tokenSecurity: (
+    chainId: string,
+    addresses: string[],
+    timeout?: number,
+  ) => Promise<GoPlusResponse>;
+};
+
+const require = createRequire(import.meta.url);
+const { ErrorCode, GoPlus } = require('@goplus/sdk-node') as {
+  ErrorCode: Record<string, unknown>;
+  GoPlus: GoPlusSdkClient;
 };
 
 const GOPLUS_CODE_MESSAGES: Record<number, string> = {
@@ -20,6 +36,7 @@ const GOPLUS_CODE_MESSAGES: Record<number, string> = {
   2027: 'ABI not found',
   2028: 'ABI does not support parsing',
   4010: 'App key not found',
+  4022: 'Invalid access token',
   4011: 'Signature expired or replayed request',
   4012: 'Wrong signature',
   4023: 'Access token not found',
@@ -27,6 +44,15 @@ const GOPLUS_CODE_MESSAGES: Record<number, string> = {
   5000: 'System error',
   5006: 'Parameter error',
 };
+
+const sdkClient = GoPlus;
+const sdkErrorCode = ErrorCode;
+const SUCCESS_CODE = normalizeGoPlusCode(sdkErrorCode.SUCCESS) ?? 1;
+const appKey = env.GOPLUS_APP_KEY?.trim() ?? '';
+const appSecret = env.GOPLUS_APP_SECRET?.trim() ?? '';
+const useSdkAuth = appKey.length > 0 && appSecret.length > 0;
+
+let sdkConfigured = false;
 
 function normalizeGoPlusCode(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -77,7 +103,7 @@ function buildGoPlusError(input: {
   const providerMessage = input.providerMessage ?? knownMessage;
   const message =
     input.code === null
-      ? providerMessage ?? input.fallback
+      ? (providerMessage ?? input.fallback)
       : `GoPlus error ${input.code}: ${providerMessage ?? input.fallback}`;
 
   return new GoPlusApiError({
@@ -87,34 +113,21 @@ function buildGoPlusError(input: {
   });
 }
 
-export async function fetchGoPlusTokenSecurity(params: {
-  chainId: number;
-  tokenAddress: string;
-}): Promise<GoPlusRiskPayload> {
-  const normalizedAddress = params.tokenAddress.toLowerCase();
-  const query = new URLSearchParams({ contract_addresses: normalizedAddress });
-  const url = `${env.GOPLUS_BASE_URL}/${params.chainId}?${query.toString()}`;
-  const response = await fetch(url);
-  const data = (await response.json().catch(() => null)) as GoPlusResponse | null;
-  const code = normalizeGoPlusCode(data?.code);
-  const providerMessage = normalizeGoPlusMessage(data?.message);
-
-  if (!response.ok) {
-    throw buildGoPlusError({
-      code,
-      providerMessage,
-      fallback: `GoPlus request failed with status ${response.status}`,
-    });
-  }
-
+function getTokenResultFromResponse(
+  data: GoPlusResponse | null,
+  addresses: { normalized: string; original: string },
+) {
   if (!data || typeof data !== 'object') {
     throw new GoPlusApiError({
       message: 'GoPlus returned an invalid response payload',
     });
   }
 
+  const code = normalizeGoPlusCode(data.code);
+  const providerMessage = normalizeGoPlusMessage(data.message);
+
   // 1 = complete payload. 2 = partial payload; avoid trusting partial risk output.
-  if (code !== null && code !== 1) {
+  if (code !== null && code !== SUCCESS_CODE) {
     throw buildGoPlusError({
       code,
       providerMessage,
@@ -123,8 +136,8 @@ export async function fetchGoPlusTokenSecurity(params: {
   }
 
   const result =
-    data.result?.[normalizedAddress] ??
-    data.result?.[params.tokenAddress] ??
+    data.result?.[addresses.normalized] ??
+    data.result?.[addresses.original] ??
     null;
 
   if (!result) {
@@ -136,4 +149,38 @@ export async function fetchGoPlusTokenSecurity(params: {
   }
 
   return result;
+}
+
+function configureSdkIfNeeded() {
+  if (!useSdkAuth || sdkConfigured) {
+    return;
+  }
+
+  sdkClient.config(appKey, appSecret, env.GOPLUS_TIMEOUT_SECONDS);
+  sdkConfigured = true;
+}
+
+async function fetchGoPlusTokenSecurityWithSdk(params: {
+  chainId: number;
+  tokenAddress: string;
+}): Promise<GoPlusRiskPayload> {
+  const normalizedAddress = params.tokenAddress.toLowerCase();
+  configureSdkIfNeeded();
+  const data = await sdkClient.tokenSecurity(
+    String(params.chainId),
+    [normalizedAddress],
+    env.GOPLUS_TIMEOUT_SECONDS,
+  );
+
+  return getTokenResultFromResponse(data, {
+    normalized: normalizedAddress,
+    original: params.tokenAddress,
+  });
+}
+
+export async function fetchGoPlusTokenSecurity(params: {
+  chainId: number;
+  tokenAddress: string;
+}): Promise<GoPlusRiskPayload> {
+  return fetchGoPlusTokenSecurityWithSdk(params);
 }

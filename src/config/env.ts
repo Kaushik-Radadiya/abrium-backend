@@ -9,9 +9,9 @@ const schema = z.object({
     .default('http://localhost:3000')
     .transform((s) => s.replace(/\/+$/, '')),
   DYNAMIC_WEBHOOK_SECRET: z.string().optional(),
-  GOPLUS_BASE_URL: z
-    .string()
-    .default('https://api.gopluslabs.io/api/v1/token_security'),
+  GOPLUS_APP_KEY: z.string().optional(),
+  GOPLUS_APP_SECRET: z.string().optional(),
+  GOPLUS_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(30),
 });
 
 export const env = schema.parse(process.env);
