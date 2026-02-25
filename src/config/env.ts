@@ -12,6 +12,16 @@ const schema = z.object({
   GOPLUS_APP_KEY: z.string().optional(),
   GOPLUS_APP_SECRET: z.string().optional(),
   GOPLUS_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(30),
+  GOPLUS_TOKEN_SECURITY_CACHE_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(1800),
+  GOPLUS_TOKEN_SECURITY_CACHE_MAX_ENTRIES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1000),
 });
 
 export const env = schema.parse(process.env);

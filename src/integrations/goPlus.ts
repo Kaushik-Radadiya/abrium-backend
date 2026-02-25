@@ -51,8 +51,16 @@ const SUCCESS_CODE = normalizeGoPlusCode(sdkErrorCode.SUCCESS) ?? 1;
 const appKey = env.GOPLUS_APP_KEY?.trim() ?? '';
 const appSecret = env.GOPLUS_APP_SECRET?.trim() ?? '';
 const useSdkAuth = appKey.length > 0 && appSecret.length > 0;
+const tokenSecurityCacheTtlMs =
+  env.GOPLUS_TOKEN_SECURITY_CACHE_TTL_SECONDS * 1_000;
+const tokenSecurityCacheMaxEntries = env.GOPLUS_TOKEN_SECURITY_CACHE_MAX_ENTRIES;
 
 let sdkConfigured = false;
+const tokenSecurityCache = new Map<
+  string,
+  { payload: GoPlusRiskPayload; expiresAt: number }
+>();
+const inFlightTokenSecurityRequests = new Map<string, Promise<GoPlusRiskPayload>>();
 
 function normalizeGoPlusCode(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -160,6 +168,50 @@ function configureSdkIfNeeded() {
   sdkConfigured = true;
 }
 
+function buildTokenSecurityCacheKey(chainId: number, tokenAddress: string) {
+  return `${chainId}:${tokenAddress.toLowerCase()}`;
+}
+
+function getCachedTokenSecurity(cacheKey: string) {
+  if (tokenSecurityCacheTtlMs <= 0) {
+    return null;
+  }
+
+  const entry = tokenSecurityCache.get(cacheKey);
+  if (!entry) {
+    return null;
+  }
+
+  if (entry.expiresAt <= Date.now()) {
+    tokenSecurityCache.delete(cacheKey);
+    return null;
+  }
+
+  tokenSecurityCache.delete(cacheKey);
+  tokenSecurityCache.set(cacheKey, entry);
+  return entry.payload;
+}
+
+function setCachedTokenSecurity(cacheKey: string, payload: GoPlusRiskPayload) {
+  if (tokenSecurityCacheTtlMs <= 0) {
+    return;
+  }
+
+  tokenSecurityCache.delete(cacheKey);
+  tokenSecurityCache.set(cacheKey, {
+    payload,
+    expiresAt: Date.now() + tokenSecurityCacheTtlMs,
+  });
+
+  while (tokenSecurityCache.size > tokenSecurityCacheMaxEntries) {
+    const oldestKey = tokenSecurityCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    tokenSecurityCache.delete(oldestKey);
+  }
+}
+
 async function fetchGoPlusTokenSecurityWithSdk(params: {
   chainId: number;
   tokenAddress: string;
@@ -182,5 +234,31 @@ export async function fetchGoPlusTokenSecurity(params: {
   chainId: number;
   tokenAddress: string;
 }): Promise<GoPlusRiskPayload> {
-  return fetchGoPlusTokenSecurityWithSdk(params);
+  const cacheKey = buildTokenSecurityCacheKey(
+    params.chainId,
+    params.tokenAddress,
+  );
+  const cachedPayload = getCachedTokenSecurity(cacheKey);
+  if (cachedPayload) {
+    return cachedPayload;
+  }
+
+  const inFlightRequest = inFlightTokenSecurityRequests.get(cacheKey);
+  if (inFlightRequest) {
+    return inFlightRequest;
+  }
+
+  const request = (async () => {
+    const payload = await fetchGoPlusTokenSecurityWithSdk(params);
+    setCachedTokenSecurity(cacheKey, payload);
+    return payload;
+  })();
+
+  inFlightTokenSecurityRequests.set(cacheKey, request);
+
+  try {
+    return await request;
+  } finally {
+    inFlightTokenSecurityRequests.delete(cacheKey);
+  }
 }
