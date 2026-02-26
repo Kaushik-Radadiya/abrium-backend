@@ -8,6 +8,7 @@ Express + Postgres backend for token risk checks and Dynamic webhook-based user 
 - Idempotent webhook processing (`webhook_events` table)
 - User + wallet sync from webhook events (`users`, `user_wallets` tables)
 - GoPlus token security wrapper + Risk Policy Engine v0 (ALLOW/WARN/BLOCK)
+- Li.Fi chain + token catalog APIs with Postgres-backed metadata cache
 - Full TypeORM stack (DataSource, entities, repositories, migrations)
 
 ## Setup
@@ -42,3 +43,5 @@ Express + Postgres backend for token risk checks and Dynamic webhook-based user 
 
 - `POST /webhooks/dynamic`
 - `GET /risk/token?chainId=1&tokenAddress=0x...`
+- `GET /catalog/chains`
+- `GET /catalog/tokens?chainId=1`

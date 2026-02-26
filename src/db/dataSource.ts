@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DataSource } from 'typeorm'
 import { env } from '../config/env.js'
+import { CatalogChain } from '../entities/CatalogChain.js'
+import { CatalogToken } from '../entities/CatalogToken.js'
 import { RiskAssessment } from '../entities/RiskAssessment.js'
 import { User } from '../entities/User.js'
 import { UserWallet } from '../entities/UserWallet.js'
@@ -13,7 +15,14 @@ const currentDir = dirname(fileURLToPath(import.meta.url))
 export const AppDataSource = new DataSource({
   type: 'postgres',
   url: env.DATABASE_URL,
-  entities: [RiskAssessment, User, UserWallet, WebhookEvent],
+  entities: [
+    CatalogChain,
+    CatalogToken,
+    RiskAssessment,
+    User,
+    UserWallet,
+    WebhookEvent,
+  ],
   migrations: [
     join(currentDir, '../migrations/*.ts'),
     join(currentDir, '../migrations/*.js'),

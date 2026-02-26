@@ -22,6 +22,19 @@ const schema = z.object({
     .int()
     .positive()
     .default(1000),
+  LIFI_BASE_URL: z.string().url().default('https://li.quest/v1'),
+  LIFI_API_KEY: z.string().optional(),
+  LIFI_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(20),
+  LIFI_CHAINS_CACHE_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(3600),
+  LIFI_TOKENS_CACHE_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(1800),
 });
 
 export const env = schema.parse(process.env);
