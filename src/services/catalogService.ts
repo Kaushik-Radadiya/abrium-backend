@@ -229,7 +229,10 @@ export async function getCatalogChains(input: CacheRefreshInput = {}) {
   const hasFreshCache =
     !input.forceRefresh &&
     metadata.hasData &&
-    isCacheFresh(metadata.latestUpdatedAt, env.LIFI_CHAINS_CACHE_TTL_SECONDS);
+    isCacheFresh(
+      metadata.latestUpdatedAt,
+      env.CATALOG_CHAINS_CACHE_TTL_SECONDS,
+    );
 
   if (hasFreshCache) {
     return cachedCatalogChains;
@@ -258,7 +261,10 @@ export async function getCatalogTokens(input: CatalogTokensInput) {
   const hasFreshCache =
     !input.forceRefresh &&
     metadata.hasData &&
-    isCacheFresh(metadata.latestUpdatedAt, env.LIFI_TOKENS_CACHE_TTL_SECONDS);
+    isCacheFresh(
+      metadata.latestUpdatedAt,
+      env.CATALOG_TOKENS_CACHE_TTL_SECONDS,
+    );
 
   if (hasFreshCache) {
     return cachedCatalogTokens;

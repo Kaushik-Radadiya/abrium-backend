@@ -22,19 +22,17 @@ const schema = z.object({
     .int()
     .positive()
     .default(1000),
-  LIFI_BASE_URL: z.string().url().default('https://li.quest/v1'),
-  LIFI_API_KEY: z.string().optional(),
-  LIFI_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(20),
   STARGATE_BASE_URL: z
     .string()
     .url()
     .default('https://stargate.finance/api/v2'),
-  LIFI_CHAINS_CACHE_TTL_SECONDS: z.coerce
+  STARGATE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(20),
+  CATALOG_CHAINS_CACHE_TTL_SECONDS: z.coerce
     .number()
     .int()
     .nonnegative()
     .default(3600),
-  LIFI_TOKENS_CACHE_TTL_SECONDS: z.coerce
+  CATALOG_TOKENS_CACHE_TTL_SECONDS: z.coerce
     .number()
     .int()
     .nonnegative()

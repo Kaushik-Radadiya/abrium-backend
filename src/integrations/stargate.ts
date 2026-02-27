@@ -130,7 +130,7 @@ async function fetchStargateJson<T>(
   const controller = new AbortController();
   const timeoutId = setTimeout(
     () => controller.abort(),
-    env.LIFI_TIMEOUT_SECONDS * 1000,
+    env.STARGATE_TIMEOUT_SECONDS * 1000,
   );
 
   try {
@@ -152,7 +152,7 @@ async function fetchStargateJson<T>(
     }
     if (isAbortError(error)) {
       throw new StargateApiError(
-        `Stargate API request timed out after ${env.LIFI_TIMEOUT_SECONDS}s`,
+        `Stargate API request timed out after ${env.STARGATE_TIMEOUT_SECONDS}s`,
       );
     }
 
