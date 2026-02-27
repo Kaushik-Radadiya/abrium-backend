@@ -53,14 +53,18 @@ const appSecret = env.GOPLUS_APP_SECRET?.trim() ?? '';
 const useSdkAuth = appKey.length > 0 && appSecret.length > 0;
 const tokenSecurityCacheTtlMs =
   env.GOPLUS_TOKEN_SECURITY_CACHE_TTL_SECONDS * 1_000;
-const tokenSecurityCacheMaxEntries = env.GOPLUS_TOKEN_SECURITY_CACHE_MAX_ENTRIES;
+const tokenSecurityCacheMaxEntries =
+  env.GOPLUS_TOKEN_SECURITY_CACHE_MAX_ENTRIES;
 
 let sdkConfigured = false;
 const tokenSecurityCache = new Map<
   string,
   { payload: GoPlusRiskPayload; expiresAt: number }
 >();
-const inFlightTokenSecurityRequests = new Map<string, Promise<GoPlusRiskPayload>>();
+const inFlightTokenSecurityRequests = new Map<
+  string,
+  Promise<GoPlusRiskPayload>
+>();
 
 function normalizeGoPlusCode(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -163,7 +167,14 @@ function configureSdkIfNeeded() {
   if (!useSdkAuth || sdkConfigured) {
     return;
   }
-
+  console.log('Configuring GoPlus SDK with provided credentials', {
+    appKey: appKey
+      ? `${appKey.substring(0, 2)}***${appKey.substring(appKey.length - 2)}`
+      : '(not set)',
+    appSecret: appSecret
+      ? `${appSecret.substring(0, 2)}***${appSecret.substring(appSecret.length - 2)}`
+      : '(not set)',
+  });
   sdkClient.config(appKey, appSecret, env.GOPLUS_TIMEOUT_SECONDS);
   sdkConfigured = true;
 }
@@ -223,6 +234,11 @@ async function fetchGoPlusTokenSecurityWithSdk(params: {
     [normalizedAddress],
     env.GOPLUS_TIMEOUT_SECONDS,
   );
+  console.log('GoPlus SDK response:', {
+    chainId: params.chainId,
+    tokenAddress: params.tokenAddress,
+    data,
+  });
 
   return getTokenResultFromResponse(data, {
     normalized: normalizedAddress,
