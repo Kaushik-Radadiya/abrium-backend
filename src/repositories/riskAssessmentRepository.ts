@@ -9,6 +9,32 @@ type PersistRiskAssessmentInput = {
   providerPayload: Record<string, unknown>
 }
 
+export async function findRecentRiskAssessment(
+  chainId: number,
+  tokenAddress: string,
+  ttlSeconds: number,
+): Promise<RiskAssessment | null> {
+  if (ttlSeconds <= 0) return null
+
+  await initializeDataSource()
+  const repository = AppDataSource.getRepository(RiskAssessment)
+
+  const cutoff = new Date(Date.now() - ttlSeconds * 1_000)
+
+  const record = await repository
+    .createQueryBuilder('ra')
+    .where('ra.chain_id = :chainId', { chainId })
+    .andWhere('ra.token_address = :tokenAddress', {
+      tokenAddress: tokenAddress.toLowerCase(),
+    })
+    .andWhere('ra.created_at >= :cutoff', { cutoff })
+    .orderBy('ra.created_at', 'DESC')
+    .limit(1)
+    .getOne()
+
+  return record ?? null
+}
+
 export async function persistRiskAssessment(input: PersistRiskAssessmentInput) {
   await initializeDataSource()
   const repository = AppDataSource.getRepository(RiskAssessment)

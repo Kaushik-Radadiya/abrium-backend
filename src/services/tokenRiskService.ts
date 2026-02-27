@@ -4,13 +4,17 @@ import {
 } from '../integrations/goPlus.js'
 import type { RiskEvaluation } from '../types/security.js'
 import { evaluateGoPlusRisk } from './riskPolicyEngine.js'
-import { persistRiskAssessment } from '../repositories/riskAssessmentRepository.js'
+import {
+  findRecentRiskAssessment,
+  persistRiskAssessment,
+} from '../repositories/riskAssessmentRepository.js'
+import { env } from '../config/env.js'
 
 function buildProviderUnavailableEvaluation(
   chainId: number,
   tokenAddress: string,
   detail: string,
-  providerMessage: string | null
+  providerMessage: string | null,
 ): RiskEvaluation {
   const normalizedProviderMessage =
     typeof providerMessage === 'string' && providerMessage.trim()
@@ -51,6 +55,23 @@ export async function assessTokenRisk(input: {
   chainId: number
   tokenAddress: string
 }) {
+  const ttlSeconds = env.GOPLUS_TOKEN_SECURITY_CACHE_TTL_SECONDS
+  const recent = await findRecentRiskAssessment(
+    input.chainId,
+    input.tokenAddress,
+    ttlSeconds,
+  )
+
+  if (recent) {
+    // eslint-disable-next-line no-console
+    console.log('Token risk served from DB cache', {
+      chainId: input.chainId,
+      tokenAddress: input.tokenAddress.toLowerCase(),
+      cachedAt: recent.createdAt,
+    })
+    return evaluateGoPlusRisk(recent.providerPayload as Record<string, unknown>)
+  }
+
   let providerPayload: Record<string, unknown> = {}
   let evaluation: RiskEvaluation
 
@@ -88,7 +109,7 @@ export async function assessTokenRisk(input: {
       input.chainId,
       input.tokenAddress,
       detail,
-      providerMessage
+      providerMessage,
     )
   }
 

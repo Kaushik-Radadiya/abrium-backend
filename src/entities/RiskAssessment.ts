@@ -1,8 +1,16 @@
-import { Check, Column, Entity, PrimaryGeneratedColumn } from 'typeorm'
+import { Check, Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 import type { RiskDecision } from '../types/security.js'
 
 @Entity({ name: 'risk_assessments' })
-@Check('risk_assessments_decision_check', `"decision" in ('ALLOW', 'WARN', 'BLOCK')`)
+@Check(
+  'risk_assessments_decision_check',
+  `"decision" in ('ALLOW', 'WARN', 'BLOCK')`,
+)
+@Index('idx_risk_assessments_chain_token_created', [
+  'chainId',
+  'tokenAddress',
+  'createdAt',
+])
 export class RiskAssessment {
   @PrimaryGeneratedColumn('uuid')
   id!: string
