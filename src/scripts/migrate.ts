@@ -2,7 +2,9 @@ import { closeDataSource, initializeDataSource } from '../db/dataSource.js'
 
 async function run() {
   const dataSource = await initializeDataSource()
-  const appliedMigrations = await dataSource.runMigrations({ transaction: 'all' })
+  const appliedMigrations = await dataSource.runMigrations({
+    transaction: 'all',
+  })
 
   if (appliedMigrations.length === 0) {
     // eslint-disable-next-line no-console
@@ -14,7 +16,7 @@ async function run() {
   console.log(
     `Applied ${appliedMigrations.length} migration(s): ${appliedMigrations
       .map((migration) => migration.name)
-      .join(', ')}`
+      .join(', ')}`,
   )
 }
 
