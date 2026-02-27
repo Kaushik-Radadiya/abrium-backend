@@ -11,6 +11,7 @@ type GoPlusResponse = {
 
 type GoPlusSdkClient = {
   config: (appKey: string, appSecret: string, timeout?: number) => void;
+  getAccessToken: () => Promise<{ code: number; message: string; result?: { access_token: string } }>;
   tokenSecurity: (
     chainId: string,
     addresses: string[],
@@ -57,6 +58,8 @@ const tokenSecurityCacheMaxEntries =
   env.GOPLUS_TOKEN_SECURITY_CACHE_MAX_ENTRIES;
 
 let sdkConfigured = false;
+let sdkConfiguringPromise: Promise<void> | null = null;
+
 const tokenSecurityCache = new Map<
   string,
   { payload: GoPlusRiskPayload; expiresAt: number }
@@ -163,20 +166,36 @@ function getTokenResultFromResponse(
   return result;
 }
 
-function configureSdkIfNeeded() {
+async function configureSdkIfNeeded() {
   if (!useSdkAuth || sdkConfigured) {
     return;
   }
-  console.log('Configuring GoPlus SDK with provided credentials', {
-    appKey: appKey
-      ? `${appKey.substring(0, 2)}***${appKey.substring(appKey.length - 2)}`
-      : '(not set)',
-    appSecret: appSecret
-      ? `${appSecret.substring(0, 2)}***${appSecret.substring(appSecret.length - 2)}`
-      : '(not set)',
-  });
-  sdkClient.config(appKey, appSecret, env.GOPLUS_TIMEOUT_SECONDS);
-  sdkConfigured = true;
+
+  if (sdkConfiguringPromise) {
+    return sdkConfiguringPromise;
+  }
+
+  sdkConfiguringPromise = (async () => {
+    try {
+      console.log('Configuring GoPlus SDK with provided credentials', {
+        appKey: appKey
+          ? `${appKey.substring(0, 2)}***${appKey.substring(appKey.length - 2)}`
+          : '(not set)',
+        appSecret: appSecret
+          ? `${appSecret.substring(0, 2)}***${appSecret.substring(appSecret.length - 2)}`
+          : '(not set)',
+      });
+      sdkClient.config(appKey, appSecret, env.GOPLUS_TIMEOUT_SECONDS);
+      await sdkClient.getAccessToken();
+      sdkConfigured = true;
+    } catch (e) {
+      console.error('Failed to get GoPlus access token:', e);
+    } finally {
+      sdkConfiguringPromise = null;
+    }
+  })();
+
+  return sdkConfiguringPromise;
 }
 
 function buildTokenSecurityCacheKey(chainId: number, tokenAddress: string) {
@@ -228,22 +247,41 @@ async function fetchGoPlusTokenSecurityWithSdk(params: {
   tokenAddress: string;
 }): Promise<GoPlusRiskPayload> {
   const normalizedAddress = params.tokenAddress.toLowerCase();
-  configureSdkIfNeeded();
-  const data = await sdkClient.tokenSecurity(
-    String(params.chainId),
-    [normalizedAddress],
-    env.GOPLUS_TIMEOUT_SECONDS,
-  );
-  console.log('GoPlus SDK response:', {
-    chainId: params.chainId,
-    tokenAddress: params.tokenAddress,
-    data,
-  });
 
-  return getTokenResultFromResponse(data, {
-    normalized: normalizedAddress,
-    original: params.tokenAddress,
-  });
+  const performRequest = async () => {
+    await configureSdkIfNeeded();
+    const data = await sdkClient.tokenSecurity(
+      String(params.chainId),
+      [normalizedAddress],
+      env.GOPLUS_TIMEOUT_SECONDS,
+    );
+    console.log('GoPlus SDK response:', {
+      chainId: params.chainId,
+      tokenAddress: params.tokenAddress,
+      data,
+    });
+
+    return getTokenResultFromResponse(data, {
+      normalized: normalizedAddress,
+      original: params.tokenAddress,
+    });
+  };
+
+  try {
+    return await performRequest();
+  } catch (error) {
+    if (
+      useSdkAuth &&
+      error instanceof GoPlusApiError &&
+      error.code !== null &&
+      [4011, 4012, 4022, 4023].includes(error.code)
+    ) {
+      console.log('GoPlus access token invalid or expired. Refreshing token...');
+      sdkConfigured = false;
+      return await performRequest();
+    }
+    throw error;
+  }
 }
 
 export async function fetchGoPlusTokenSecurity(params: {
