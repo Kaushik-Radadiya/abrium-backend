@@ -177,14 +177,6 @@ async function configureSdkIfNeeded() {
 
   sdkConfiguringPromise = (async () => {
     try {
-      console.log('Configuring GoPlus SDK with provided credentials', {
-        appKey: appKey
-          ? `${appKey.substring(0, 2)}***${appKey.substring(appKey.length - 2)}`
-          : '(not set)',
-        appSecret: appSecret
-          ? `${appSecret.substring(0, 2)}***${appSecret.substring(appSecret.length - 2)}`
-          : '(not set)',
-      });
       sdkClient.config(appKey, appSecret, env.GOPLUS_TIMEOUT_SECONDS);
       await sdkClient.getAccessToken();
       sdkConfigured = true;
@@ -255,11 +247,6 @@ async function fetchGoPlusTokenSecurityWithSdk(params: {
       [normalizedAddress],
       env.GOPLUS_TIMEOUT_SECONDS,
     );
-    console.log('GoPlus SDK response:', {
-      chainId: params.chainId,
-      tokenAddress: params.tokenAddress,
-      data,
-    });
 
     return getTokenResultFromResponse(data, {
       normalized: normalizedAddress,
