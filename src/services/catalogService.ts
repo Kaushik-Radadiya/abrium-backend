@@ -2,9 +2,9 @@ import { AppDataSource, initializeDataSource } from '../db/dataSource.js';
 import { CatalogChain } from '../entities/CatalogChain.js';
 import { CatalogToken } from '../entities/CatalogToken.js';
 import {
-  fetchLiFiChains,
-  fetchLiFiTokensForChainKeys,
-} from '../integrations/liFi.js';
+  fetchStargateChains,
+  fetchStargateTokensForChainKeys,
+} from '../integrations/stargate.js';
 import { env } from '../config/env.js';
 
 const UPSERT_BATCH_SIZE = 500;
@@ -136,10 +136,10 @@ async function readCachedTokensByChain(chainId: number) {
   };
 }
 
-async function syncChainsFromLiFi() {
-  const remoteChains = await fetchLiFiChains();
+async function syncChainsFromStargate() {
+  const remoteChains = await fetchStargateChains();
   if (remoteChains.length === 0) {
-    throw new Error('LiFi did not return any supported chains');
+    throw new Error('Stargate did not return any supported chains');
   }
 
   const syncTimestamp = new Date();
@@ -177,23 +177,21 @@ async function resolveChainKey(chainId: number) {
   let chain = await repository.findOne({ where: { chainId } });
   if (chain?.chainKey) return chain.chainKey;
 
-  await syncChainsFromLiFi();
+  await syncChainsFromStargate();
   chain = await repository.findOne({ where: { chainId } });
   if (chain?.chainKey) return chain.chainKey;
 
-  throw buildStatusError(`Chain ${chainId} is not supported by LiFi`, 404);
+  throw buildStatusError(`Chain ${chainId} is not supported by Stargate`, 404);
 }
 
 async function syncTokensByChainId(chainId: number, chainKey: string) {
-  const remoteTokens = await fetchLiFiTokensForChainKeys([chainKey]);
-
-  const chainTokens = remoteTokens.filter((token) => token.chainId === chainId);
+  const chainTokens = await fetchStargateTokensForChainKeys([chainKey]);
 
   const syncTimestamp = new Date();
   await AppDataSource.transaction(async (manager) => {
     const repository = manager.getRepository(CatalogToken);
     const rows = chainTokens.map((item) => ({
-      chainId: item.chainId,
+      chainId,
       address: item.address,
       symbol: item.symbol,
       name: item.name,
@@ -238,7 +236,7 @@ export async function getCatalogChains(input: CacheRefreshInput = {}) {
   }
 
   try {
-    await syncChainsFromLiFi();
+    await syncChainsFromStargate();
   } catch (error) {
     if (metadata.hasData) {
       return cachedCatalogChains;

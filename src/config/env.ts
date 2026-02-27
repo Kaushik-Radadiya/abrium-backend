@@ -25,6 +25,10 @@ const schema = z.object({
   LIFI_BASE_URL: z.string().url().default('https://li.quest/v1'),
   LIFI_API_KEY: z.string().optional(),
   LIFI_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(20),
+  STARGATE_BASE_URL: z
+    .string()
+    .url()
+    .default('https://stargate.finance/api/v2'),
   LIFI_CHAINS_CACHE_TTL_SECONDS: z.coerce
     .number()
     .int()
