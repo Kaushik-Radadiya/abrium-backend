@@ -27,6 +27,12 @@ const schema = z.object({
     .url()
     .default('https://stargate.finance/api/v2'),
   STARGATE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(20),
+  COINGECKO_BASE_URL: z
+    .string()
+    .url()
+    .default('https://api.coingecko.com/api/v3'),
+  COINGECKO_API_KEY: z.string().optional(),
+  COINGECKO_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(20),
   CATALOG_CHAINS_CACHE_TTL_SECONDS: z.coerce
     .number()
     .int()

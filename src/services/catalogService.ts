@@ -2,6 +2,11 @@ import { AppDataSource, initializeDataSource } from '../db/dataSource.js';
 import { CatalogChain } from '../entities/CatalogChain.js';
 import { CatalogToken } from '../entities/CatalogToken.js';
 import {
+  fetchCoinGeckoChains,
+  fetchCoinGeckoCoinIdsByContracts,
+  fetchCoinGeckoTokenMarketsByCoinIds,
+} from '../integrations/coingecko.js';
+import {
   fetchStargateChains,
   fetchStargateTokensForChainKeys,
 } from '../integrations/stargate.js';
@@ -35,6 +40,11 @@ export type CatalogTokenItem = {
   name: string;
   decimals: number;
   logoURI?: string;
+  priceUsd?: number | null;
+  priceChange1hPercent?: number | null;
+  priceChange24hPercent?: number | null;
+  priceChange7dPercent?: number | null;
+  volume24hUsd?: number | null;
 };
 
 type CacheMetadata = {
@@ -84,6 +94,11 @@ function mapCatalogToken(entity: CatalogToken): CatalogTokenItem {
     name: entity.name,
     decimals: entity.decimals,
     logoURI: entity.logoUri ?? undefined,
+    priceUsd: entity.priceUsd ?? null,
+    priceChange1hPercent: entity.priceChange1hPercent ?? null,
+    priceChange24hPercent: entity.priceChange24hPercent ?? null,
+    priceChange7dPercent: entity.priceChange7dPercent ?? null,
+    volume24hUsd: entity.volume24hUsd ?? null,
   };
 }
 
@@ -137,10 +152,16 @@ async function readCachedTokensByChain(chainId: number) {
 }
 
 async function syncChainsFromStargate() {
-  const remoteChains = await fetchStargateChains();
+  const [remoteChains, coinGeckoChains] = await Promise.all([
+    fetchStargateChains(),
+    fetchCoinGeckoChains().catch(() => []),
+  ]);
   if (remoteChains.length === 0) {
     throw new Error('Stargate did not return any supported chains');
   }
+  const coingeckoByChainId = new Map(
+    coinGeckoChains.map((chain) => [chain.chainId, chain] as const),
+  );
 
   const syncTimestamp = new Date();
   await AppDataSource.transaction(async (manager) => {
@@ -148,9 +169,9 @@ async function syncChainsFromStargate() {
     const rows = remoteChains.map((item) => ({
       chainId: item.chainId,
       chainKey: item.chainKey,
-      name: item.name,
+      name: coingeckoByChainId.get(item.chainId)?.name ?? item.name,
       nativeSymbol: item.nativeSymbol,
-      logoUri: item.logoUri,
+      logoUri: coingeckoByChainId.get(item.chainId)?.logoUri ?? item.logoUri,
       rpcUrls: item.rpcUrls,
       explorerUrl: item.explorerUrl,
       mainnet: item.mainnet,
@@ -184,19 +205,77 @@ async function resolveChainKey(chainId: number) {
   throw buildStatusError(`Chain ${chainId} is not supported by Stargate`, 404);
 }
 
+async function resolveCoinGeckoPlatformId(chainId: number) {
+  const chains = await fetchCoinGeckoChains();
+  const platformId = chains.find((chain) => chain.chainId === chainId)?.coingeckoId;
+  return platformId ?? null;
+}
+
 async function syncTokensByChainId(chainId: number, chainKey: string) {
   const chainTokens = await fetchStargateTokensForChainKeys([chainKey]);
+  let coinIdByAddress = new Map<string, string>();
+
+  const platformId = await resolveCoinGeckoPlatformId(chainId).catch(
+    () => null,
+  );
+  if (platformId) {
+    coinIdByAddress = await fetchCoinGeckoCoinIdsByContracts(
+      platformId,
+      chainTokens.map((token) => token.address),
+    ).catch(() => new Map<string, string>());
+  }
+
+  const withCoinIds = chainTokens.map((token) => ({
+    ...token,
+    coingeckoCoinId: coinIdByAddress.get(token.address) ?? null,
+  }));
+  const marketDataByCoinId = await fetchCoinGeckoTokenMarketsByCoinIds(
+    withCoinIds
+      .map((token) => token.coingeckoCoinId)
+      .filter((id): id is string => Boolean(id)),
+  );
 
   const syncTimestamp = new Date();
   await AppDataSource.transaction(async (manager) => {
     const repository = manager.getRepository(CatalogToken);
-    const rows = chainTokens.map((item) => ({
+    const rows = withCoinIds.map((item) => ({
       chainId,
       address: item.address,
       symbol: item.symbol,
       name: item.name,
       decimals: item.decimals,
       logoUri: item.logoUri,
+      coingeckoCoinId: item.coingeckoCoinId,
+      priceUsd:
+        item.coingeckoCoinId &&
+        marketDataByCoinId.has(item.coingeckoCoinId.toLowerCase())
+          ? marketDataByCoinId.get(item.coingeckoCoinId.toLowerCase())
+              ?.priceUsd ?? null
+          : null,
+      priceChange1hPercent:
+        item.coingeckoCoinId &&
+        marketDataByCoinId.has(item.coingeckoCoinId.toLowerCase())
+          ? marketDataByCoinId.get(item.coingeckoCoinId.toLowerCase())
+              ?.priceChange1hPercent ?? null
+          : null,
+      priceChange24hPercent:
+        item.coingeckoCoinId &&
+        marketDataByCoinId.has(item.coingeckoCoinId.toLowerCase())
+          ? marketDataByCoinId.get(item.coingeckoCoinId.toLowerCase())
+              ?.priceChange24hPercent ?? null
+          : null,
+      priceChange7dPercent:
+        item.coingeckoCoinId &&
+        marketDataByCoinId.has(item.coingeckoCoinId.toLowerCase())
+          ? marketDataByCoinId.get(item.coingeckoCoinId.toLowerCase())
+              ?.priceChange7dPercent ?? null
+          : null,
+      volume24hUsd:
+        item.coingeckoCoinId &&
+        marketDataByCoinId.has(item.coingeckoCoinId.toLowerCase())
+          ? marketDataByCoinId.get(item.coingeckoCoinId.toLowerCase())
+              ?.volume24hUsd ?? null
+          : null,
       updatedAt: syncTimestamp,
     }));
 

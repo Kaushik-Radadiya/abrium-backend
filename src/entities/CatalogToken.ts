@@ -20,6 +20,36 @@ export class CatalogToken {
   @Column({ name: 'logo_uri', type: 'text', nullable: true })
   logoUri!: string | null
 
+  @Column({ name: 'coingecko_coin_id', type: 'text', nullable: true })
+  coingeckoCoinId!: string | null
+
+  @Column({ name: 'price_usd', type: 'double precision', nullable: true })
+  priceUsd!: number | null
+
+  @Column({
+    name: 'price_change_1h_percent',
+    type: 'double precision',
+    nullable: true,
+  })
+  priceChange1hPercent!: number | null
+
+  @Column({
+    name: 'price_change_24h_percent',
+    type: 'double precision',
+    nullable: true,
+  })
+  priceChange24hPercent!: number | null
+
+  @Column({
+    name: 'price_change_7d_percent',
+    type: 'double precision',
+    nullable: true,
+  })
+  priceChange7dPercent!: number | null
+
+  @Column({ name: 'volume_24h_usd', type: 'double precision', nullable: true })
+  volume24hUsd!: number | null
+
   @Column({
     name: 'updated_at',
     type: 'timestamptz',
