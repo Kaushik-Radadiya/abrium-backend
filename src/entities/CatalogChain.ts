@@ -17,12 +17,6 @@ export class CatalogChain {
   @Column({ name: 'logo_uri', type: 'text', nullable: true })
   logoUri!: string | null
 
-  @Column({ name: 'rpc_urls', type: 'jsonb' })
-  rpcUrls!: string[]
-
-  @Column({ name: 'explorer_url', type: 'text', nullable: true })
-  explorerUrl!: string | null
-
   @Column({ name: 'mainnet', type: 'boolean', default: true })
   mainnet!: boolean
 

@@ -73,7 +73,13 @@ export type CoinGeckoTokenMarketSnapshot = {
 };
 
 const EVM_ADDRESS_REGEX = /^0x[a-f0-9]{40}$/;
-const COINS_MARKET_BATCH_SIZE = 200;
+const COINS_MARKET_BATCH_SIZE = 100;
+const COINS_MARKET_CONCURRENCY = 4;
+const CHAIN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+let chainsCache:
+  | { expiresAt: number; value: CoinGeckoChainMetadata[] }
+  | null = null;
 
 function toNonEmptyString(value: unknown) {
   if (typeof value !== 'string') return null;
@@ -119,6 +125,22 @@ function buildCoinGeckoUrl(path: string, searchParams?: URLSearchParams) {
   return url;
 }
 
+function buildCoinGeckoHeaders(): HeadersInit {
+  const headers: HeadersInit = { accept: 'application/json' };
+  const apiKey = env.COINGECKO_API_KEY?.trim();
+  if (!apiKey) {
+    return headers;
+  }
+
+  const isProApi = new URL(env.COINGECKO_BASE_URL).hostname
+    .toLowerCase()
+    .includes('pro-api.coingecko.com');
+  headers[isProApi ? 'x-cg-pro-api-key' : 'x-cg-demo-api-key'] = apiKey;
+  return headers;
+}
+
+const COINGECKO_HEADERS = buildCoinGeckoHeaders();
+
 async function fetchCoinGeckoJson<T>(
   path: string,
   searchParams?: URLSearchParams,
@@ -130,15 +152,10 @@ async function fetchCoinGeckoJson<T>(
   );
 
   try {
-    const headers: HeadersInit = {};
-    if (env.COINGECKO_API_KEY) {
-      headers['x-cg-demo-api-key'] = env.COINGECKO_API_KEY;
-    }
-
     const response = await fetch(buildCoinGeckoUrl(path, searchParams), {
       method: 'GET',
       signal: controller.signal,
-      headers,
+      headers: COINGECKO_HEADERS,
     });
     if (!response.ok) {
       const fallback = `CoinGecko API request failed (${response.status})`;
@@ -181,11 +198,16 @@ function parseChain(
     coingeckoId,
     name,
     logoUri: toNonEmptyString(platform.image),
-    nativeCoinId: toNonEmptyString(platform.native_coin_id)?.toLowerCase() ?? null,
+    nativeCoinId:
+      toNonEmptyString(platform.native_coin_id)?.toLowerCase() ?? null,
   };
 }
 
 export async function fetchCoinGeckoChains() {
+  if (chainsCache && chainsCache.expiresAt > Date.now()) {
+    return chainsCache.value;
+  }
+
   const payload = await fetchCoinGeckoJson<unknown>('/asset_platforms');
   if (!Array.isArray(payload)) {
     throw new CoinGeckoApiError(
@@ -203,7 +225,12 @@ export async function fetchCoinGeckoChains() {
     }
   }
 
-  return Array.from(deduped.values());
+  const chains = Array.from(deduped.values());
+  chainsCache = {
+    expiresAt: Date.now() + CHAIN_CACHE_TTL_MS,
+    value: chains,
+  };
+  return chains;
 }
 
 function normalizeEvmAddress(address: string) {
@@ -305,6 +332,7 @@ export async function fetchCoinGeckoCoinIdsByContracts(
     if (!byAddress.has(normalizedAddress)) {
       byAddress.set(normalizedAddress, coinId);
     }
+    if (byAddress.size >= trackedAddresses.size) break;
   }
 
   return byAddress;
@@ -340,6 +368,82 @@ function parseCoinsMarket(
   };
 }
 
+async function mapWithConcurrency<TInput, TOutput>(
+  items: TInput[],
+  concurrency: number,
+  mapper: (item: TInput) => Promise<TOutput>,
+) {
+  const safeConcurrency = Math.max(1, Math.min(concurrency, items.length));
+  if (safeConcurrency === 0) return [] as TOutput[];
+
+  const results: TOutput[] = new Array(items.length);
+  let cursor = 0;
+
+  const workers = Array.from({ length: safeConcurrency }, async () => {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) break;
+      results[index] = await mapper(items[index]);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+async function fetchCoinGeckoTokenMarketsBatch(
+  coinIds: string[],
+): Promise<CoinGeckoTokenMarketSnapshot[]> {
+  if (coinIds.length === 0) return [] as CoinGeckoTokenMarketSnapshot[];
+
+  const params = new URLSearchParams({
+    vs_currency: 'usd',
+    ids: coinIds.join(','),
+    per_page: String(coinIds.length),
+    page: '1',
+    sparkline: 'false',
+    price_change_percentage: '1h,24h,7d',
+  });
+
+  try {
+    const payload = await fetchCoinGeckoJson<unknown>('/coins/markets', params);
+    if (!Array.isArray(payload)) return [] as CoinGeckoTokenMarketSnapshot[];
+
+    const snapshots: CoinGeckoTokenMarketSnapshot[] = [];
+    for (const entry of payload) {
+      if (!entry || typeof entry !== 'object') continue;
+      const parsed = parseCoinsMarket(entry as CoinGeckoCoinsMarketApi);
+      if (!parsed) continue;
+      snapshots.push(parsed);
+    }
+    return snapshots;
+  } catch (error) {
+    if (
+      error instanceof CoinGeckoApiError &&
+      error.status === 400 &&
+      coinIds.length > 1
+    ) {
+      const middle = Math.floor(coinIds.length / 2);
+      const [left, right] = await Promise.all([
+        fetchCoinGeckoTokenMarketsBatch(coinIds.slice(0, middle)),
+        fetchCoinGeckoTokenMarketsBatch(coinIds.slice(middle)),
+      ]);
+      return [...left, ...right];
+    }
+
+    if (
+      error instanceof CoinGeckoApiError &&
+      error.status === 400 &&
+      coinIds.length === 1
+    ) {
+      return [] as CoinGeckoTokenMarketSnapshot[];
+    }
+
+    throw error;
+  }
+}
+
 export async function fetchCoinGeckoTokenMarketsByCoinIds(coinIds: string[]) {
   const normalizedCoinIds = Array.from(
     new Set(coinIds.map((id) => id.trim().toLowerCase()).filter(Boolean)),
@@ -350,28 +454,16 @@ export async function fetchCoinGeckoTokenMarketsByCoinIds(coinIds: string[]) {
 
   const markets = new Map<string, CoinGeckoTokenMarketSnapshot>();
   const batches = chunkItems(normalizedCoinIds, COINS_MARKET_BATCH_SIZE);
-
-  for (const batch of batches) {
-    const params = new URLSearchParams({
-      vs_currency: 'usd',
-      ids: batch.join(','),
-      per_page: String(batch.length),
-      page: '1',
-      sparkline: 'false',
-      price_change_percentage: '1h,24h,7d',
-    });
-
-    const payload = await fetchCoinGeckoJson<unknown>(
-      '/coins/markets',
-      params,
+  const snapshotsByBatch: CoinGeckoTokenMarketSnapshot[][] =
+    await mapWithConcurrency(
+      batches,
+      COINS_MARKET_CONCURRENCY,
+      (batch) => fetchCoinGeckoTokenMarketsBatch(batch),
     );
-    if (!Array.isArray(payload)) continue;
 
-    for (const entry of payload) {
-      if (!entry || typeof entry !== 'object') continue;
-      const parsed = parseCoinsMarket(entry as CoinGeckoCoinsMarketApi);
-      if (!parsed) continue;
-      markets.set(parsed.coingeckoCoinId, parsed);
+  for (const snapshots of snapshotsByBatch) {
+    for (const snapshot of snapshots) {
+      markets.set(snapshot.coingeckoCoinId, snapshot);
     }
   }
 
