@@ -15,6 +15,12 @@ export class User {
   @Column({ name: 'auth_provider', type: 'text', nullable: true })
   authProvider!: string | null
 
+  @Column({ name: 'is_verified', type: 'boolean', default: false })
+  isVerified!: boolean
+
+  @Column({ name: 'wealth_tier', type: 'integer', default: 0 })
+  wealthTier!: number
+
   @Column({ name: 'is_deleted', type: 'boolean', default: false })
   isDeleted!: boolean
 

@@ -306,6 +306,8 @@ export async function handleDynamicWebhook(req: Request, res: Response) {
               email: nextEmail,
               walletAddress,
               authProvider: userData.authProvider,
+              isVerified: false,
+              wealthTier: 0,
               isDeleted: false,
               deletedAt: null,
             }),

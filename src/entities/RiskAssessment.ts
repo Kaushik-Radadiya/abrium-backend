@@ -1,5 +1,5 @@
 import { Check, Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
-import type { RiskDecision } from '../types/security.js'
+import type { RiskBadge, RiskDecision } from '../types/security.js'
 
 @Entity({ name: 'risk_assessments' })
 @Check(
@@ -21,9 +21,6 @@ export class RiskAssessment {
   @Column({ name: 'token_address', type: 'text' })
   tokenAddress!: string
 
-  @Column({ type: 'integer' })
-  score!: number
-
   @Column({ type: 'text' })
   decision!: RiskDecision
 
@@ -32,6 +29,9 @@ export class RiskAssessment {
 
   @Column({ type: 'jsonb' })
   reasons!: string[]
+
+  @Column({ type: 'jsonb', default: [] })
+  badges!: RiskBadge[]
 
   @Column({ name: 'provider_payload', type: 'jsonb' })
   providerPayload!: object
