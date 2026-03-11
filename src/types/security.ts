@@ -18,7 +18,6 @@ export type TokenRiskMetrics = {
 
 export type RiskEvaluation = {
   decision: RiskDecision
-  score: number
   flags: string[]
   criticalFlags: string[]
   warningFlags: string[]
