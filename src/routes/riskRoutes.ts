@@ -27,7 +27,6 @@ riskRouter.get('/token', async (req, res) => {
 
     return successResponse(res, 'Token risk fetched successfully', 200, {
       decision: evaluation.decision,
-      score: hasProviderUnavailable ? null : evaluation.score,
       flags: evaluation.flags,
       criticalFlags: evaluation.criticalFlags,
       warningFlags: evaluation.warningFlags,

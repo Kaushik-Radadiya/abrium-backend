@@ -11,7 +11,11 @@ type GoPlusResponse = {
 
 type GoPlusSdkClient = {
   config: (appKey: string, appSecret: string, timeout?: number) => void;
-  getAccessToken: () => Promise<{ code: number; message: string; result?: { access_token: string } }>;
+  getAccessToken: () => Promise<{
+    code: number;
+    message: string;
+    result?: { access_token: string };
+  }>;
   tokenSecurity: (
     chainId: string,
     addresses: string[],
@@ -56,6 +60,7 @@ const tokenSecurityCacheTtlMs =
   env.GOPLUS_TOKEN_SECURITY_CACHE_TTL_SECONDS * 1_000;
 const tokenSecurityCacheMaxEntries =
   env.GOPLUS_TOKEN_SECURITY_CACHE_MAX_ENTRIES;
+const TOKEN_SECURITY_BATCH_SIZE = 50;
 
 let sdkConfigured = false;
 let sdkConfiguringPromise: Promise<void> | null = null;
@@ -64,10 +69,24 @@ const tokenSecurityCache = new Map<
   string,
   { payload: GoPlusRiskPayload; expiresAt: number }
 >();
-const inFlightTokenSecurityRequests = new Map<
-  string,
-  Promise<GoPlusRiskPayload>
->();
+
+function chunkItems<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let offset = 0; offset < items.length; offset += size) {
+    chunks.push(items.slice(offset, offset + size));
+  }
+  return chunks;
+}
+
+function normalizeTokenAddresses(tokenAddresses: string[]) {
+  return Array.from(
+    new Set(
+      tokenAddresses
+        .map((address) => address.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+}
 
 function normalizeGoPlusCode(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -128,9 +147,9 @@ function buildGoPlusError(input: {
   });
 }
 
-function getTokenResultFromResponse(
+function getTokenResultsFromResponse(
   data: GoPlusResponse | null,
-  addresses: { normalized: string; original: string },
+  normalizedAddresses: string[],
 ) {
   if (!data || typeof data !== 'object') {
     throw new GoPlusApiError({
@@ -141,7 +160,6 @@ function getTokenResultFromResponse(
   const code = normalizeGoPlusCode(data.code);
   const providerMessage = normalizeGoPlusMessage(data.message);
 
-  // 1 = complete payload. 2 = partial payload; avoid trusting partial risk output.
   if (code !== null && code !== SUCCESS_CODE) {
     throw buildGoPlusError({
       code,
@@ -150,12 +168,8 @@ function getTokenResultFromResponse(
     });
   }
 
-  const result =
-    data.result?.[addresses.normalized] ??
-    data.result?.[addresses.original] ??
-    null;
-
-  if (!result) {
+  const results = data.result;
+  if (!results || typeof results !== 'object') {
     throw buildGoPlusError({
       code,
       providerMessage,
@@ -163,7 +177,14 @@ function getTokenResultFromResponse(
     });
   }
 
-  return result;
+  const payloadByAddress = new Map<string, GoPlusRiskPayload>();
+  for (const address of normalizedAddresses) {
+    const payload = results[address] ?? results[address.toLowerCase()] ?? null;
+    if (!payload || typeof payload !== 'object') continue;
+    payloadByAddress.set(address, payload);
+  }
+
+  return payloadByAddress;
 }
 
 async function configureSdkIfNeeded() {
@@ -234,24 +255,24 @@ function setCachedTokenSecurity(cacheKey: string, payload: GoPlusRiskPayload) {
   }
 }
 
-async function fetchGoPlusTokenSecurityWithSdk(params: {
+async function fetchGoPlusTokenSecurityBatchWithSdk(params: {
   chainId: number;
-  tokenAddress: string;
-}): Promise<GoPlusRiskPayload> {
-  const normalizedAddress = params.tokenAddress.toLowerCase();
+  tokenAddresses: string[];
+}): Promise<Map<string, GoPlusRiskPayload>> {
+  const normalizedAddresses = normalizeTokenAddresses(params.tokenAddresses);
+  if (normalizedAddresses.length === 0) {
+    return new Map<string, GoPlusRiskPayload>();
+  }
 
   const performRequest = async () => {
     await configureSdkIfNeeded();
     const data = await sdkClient.tokenSecurity(
       String(params.chainId),
-      [normalizedAddress],
+      normalizedAddresses,
       env.GOPLUS_TIMEOUT_SECONDS,
     );
 
-    return getTokenResultFromResponse(data, {
-      normalized: normalizedAddress,
-      original: params.tokenAddress,
-    });
+    return getTokenResultsFromResponse(data, normalizedAddresses);
   };
 
   try {
@@ -263,7 +284,6 @@ async function fetchGoPlusTokenSecurityWithSdk(params: {
       error.code !== null &&
       [4011, 4012, 4022, 4023].includes(error.code)
     ) {
-      console.log('GoPlus access token invalid or expired. Refreshing token...');
       sdkConfigured = false;
       return await performRequest();
     }
@@ -271,35 +291,45 @@ async function fetchGoPlusTokenSecurityWithSdk(params: {
   }
 }
 
-export async function fetchGoPlusTokenSecurity(params: {
+export async function fetchGoPlusTokenSecurityBatch(params: {
   chainId: number;
-  tokenAddress: string;
-}): Promise<GoPlusRiskPayload> {
-  const cacheKey = buildTokenSecurityCacheKey(
-    params.chainId,
-    params.tokenAddress,
-  );
-  const cachedPayload = getCachedTokenSecurity(cacheKey);
-  if (cachedPayload) {
-    return cachedPayload;
+  tokenAddresses: string[];
+  bypassCache?: boolean;
+}): Promise<Map<string, GoPlusRiskPayload>> {
+  const normalizedAddresses = normalizeTokenAddresses(params.tokenAddresses);
+  const payloadByAddress = new Map<string, GoPlusRiskPayload>();
+  if (normalizedAddresses.length === 0) {
+    return payloadByAddress;
   }
 
-  const inFlightRequest = inFlightTokenSecurityRequests.get(cacheKey);
-  if (inFlightRequest) {
-    return inFlightRequest;
+  const addressesToFetch: string[] = [];
+  for (const address of normalizedAddresses) {
+    const cacheKey = buildTokenSecurityCacheKey(params.chainId, address);
+    const cachedPayload = params.bypassCache
+      ? null
+      : getCachedTokenSecurity(cacheKey);
+    if (cachedPayload) {
+      payloadByAddress.set(address, cachedPayload);
+    } else {
+      addressesToFetch.push(address);
+    }
   }
 
-  const request = (async () => {
-    const payload = await fetchGoPlusTokenSecurityWithSdk(params);
-    setCachedTokenSecurity(cacheKey, payload);
-    return payload;
-  })();
+  const batches = chunkItems(addressesToFetch, TOKEN_SECURITY_BATCH_SIZE);
+  for (const batch of batches) {
+    const fetched = await fetchGoPlusTokenSecurityBatchWithSdk({
+      chainId: params.chainId,
+      tokenAddresses: batch,
+    });
 
-  inFlightTokenSecurityRequests.set(cacheKey, request);
-
-  try {
-    return await request;
-  } finally {
-    inFlightTokenSecurityRequests.delete(cacheKey);
+    for (const [address, payload] of fetched.entries()) {
+      payloadByAddress.set(address, payload);
+      setCachedTokenSecurity(
+        buildTokenSecurityCacheKey(params.chainId, address),
+        payload,
+      );
+    }
   }
+
+  return payloadByAddress;
 }
