@@ -124,6 +124,25 @@ function buildStatusError(message: string, status: number) {
   return Object.assign(new Error(message), { status });
 }
 
+const tokenSyncInProgress = new Map<number, Promise<void>>();
+
+function triggerBackgroundTokenSync(chainId: number, chainKey: string): void {
+  if (tokenSyncInProgress.has(chainId)) return;
+
+  const promise = syncTokensByChainId(chainId, chainKey)
+    .catch((error) => {
+      console.warn(
+        `Background catalog token sync failed for chain ${chainId}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    })
+    .finally(() => {
+      tokenSyncInProgress.delete(chainId);
+    });
+
+  tokenSyncInProgress.set(chainId, promise);
+}
+
 async function readCachedChains() {
   const repository = AppDataSource.getRepository(CatalogChain);
   const [items, latestRows] = await Promise.all([
@@ -351,20 +370,6 @@ async function syncTokensByChainId(chainId: number, chainKey: string) {
     for (const chunk of chunkItems(rows, UPSERT_BATCH_SIZE)) {
       await repository.upsert(chunk, ['chainId', 'address']);
     }
-
-    if (rows.length === 0) {
-      await repository.delete({ chainId });
-      return;
-    }
-
-    await repository
-      .createQueryBuilder()
-      .delete()
-      .where('chain_id = :chainId and updated_at < :syncTimestamp', {
-        chainId,
-        syncTimestamp: syncTimestamp.toISOString(),
-      })
-      .execute();
   });
 }
 
@@ -426,6 +431,11 @@ export async function getCatalogTokens(input: CatalogTokensInput) {
       return cachedCatalogTokens;
     }
     throw error;
+  }
+
+  if (!input.forceRefresh && metadata.hasData) {
+    triggerBackgroundTokenSync(input.chainId, chainKey);
+    return cachedCatalogTokens;
   }
 
   try {
