@@ -12,6 +12,20 @@ const schema = z.object({
   GOPLUS_APP_KEY: z.string().optional(),
   GOPLUS_APP_SECRET: z.string().optional(),
   GOPLUS_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(30),
+  GOPLUS_TOKEN_SECURITY_CACHE_TTL_ESTABLISHED_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(21600),
+  GOPLUS_TOKEN_SECURITY_CACHE_TTL_EMERGING_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(900),
+  GOPLUS_TOKEN_SECURITY_LOW_LIQUIDITY_THRESHOLD_USD: z.coerce
+    .number()
+    .nonnegative()
+    .default(100000),
   GOPLUS_TOKEN_SECURITY_CACHE_TTL_SECONDS: z.coerce
     .number()
     .int()
@@ -33,6 +47,11 @@ const schema = z.object({
     .default('https://api.coingecko.com/api/v3'),
   COINGECKO_API_KEY: z.string().optional(),
   COINGECKO_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(20),
+  DEFI_LLAMA_BASE_URL: z
+    .string()
+    .url()
+    .default('https://yields.llama.fi'),
+  DEFI_LLAMA_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(20),
   CATALOG_CHAINS_CACHE_TTL_SECONDS: z.coerce
     .number()
     .int()

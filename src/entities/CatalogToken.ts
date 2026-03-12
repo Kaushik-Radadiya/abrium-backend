@@ -1,5 +1,5 @@
 import { Column, Entity, PrimaryColumn } from 'typeorm'
-import type { RiskBadge } from '../types/security.js'
+import type { SecurityLevel } from '../types/security.js'
 
 @Entity({ name: 'catalog_tokens' })
 export class CatalogToken {
@@ -61,13 +61,13 @@ export class CatalogToken {
   apyUpdatedAt!: Date | null
 
   @Column({ name: 'security_level', type: 'text', nullable: true })
-  securityLevel!: 'Verified' | 'Caution' | 'Danger' | null
+  securityLevel!: SecurityLevel | null
 
   @Column({ name: 'security_updated_at', type: 'timestamptz', nullable: true })
   securityUpdatedAt!: Date | null
 
   @Column({ name: 'security_badges', type: 'jsonb', nullable: true })
-  securityBadges!: RiskBadge[] | null
+  securityBadges!: object[] | null
 
   @Column({
     name: 'updated_at',

@@ -9,43 +9,59 @@ type PersistRiskAssessmentInput = {
   providerPayload: Record<string, unknown>
 }
 
-export async function findRecentRiskAssessment(
-  chainId: number,
-  tokenAddress: string,
-  ttlSeconds: number,
-): Promise<RiskAssessment | null> {
-  if (ttlSeconds <= 0) return null
-
-  await initializeDataSource()
-  const repository = AppDataSource.getRepository(RiskAssessment)
-
-  const cutoff = new Date(Date.now() - ttlSeconds * 1_000)
-
-  const record = await repository
-    .createQueryBuilder('ra')
-    .where('ra.chain_id = :chainId', { chainId })
-    .andWhere('ra.token_address = :tokenAddress', {
-      tokenAddress: tokenAddress.toLowerCase(),
-    })
-    .andWhere('ra.created_at >= :cutoff', { cutoff })
-    .orderBy('ra.created_at', 'DESC')
-    .limit(1)
-    .getOne()
-
-  return record ?? null
+function normalizeTokenAddresses(tokenAddresses: string[]) {
+  return Array.from(
+    new Set(tokenAddresses.map((tokenAddress) => tokenAddress.toLowerCase())),
+  )
 }
 
-export async function persistRiskAssessment(input: PersistRiskAssessmentInput) {
+export async function findLatestRiskAssessmentsByTokens(
+  chainId: number,
+  tokenAddresses: string[],
+) {
+  const normalizedTokenAddresses = normalizeTokenAddresses(tokenAddresses).filter(
+    Boolean,
+  )
+  if (normalizedTokenAddresses.length === 0) {
+    return new Map<string, RiskAssessment>()
+  }
+
   await initializeDataSource()
   const repository = AppDataSource.getRepository(RiskAssessment)
 
-  await repository.insert({
-    chainId: input.chainId,
-    tokenAddress: input.tokenAddress.toLowerCase(),
-    score: input.evaluation.score,
-    decision: input.evaluation.decision,
-    flags: input.evaluation.flags,
-    reasons: input.evaluation.reasons,
-    providerPayload: input.providerPayload,
-  })
+  const rows = await repository
+    .createQueryBuilder('ra')
+    .distinctOn(['ra.token_address'])
+    .where('ra.chain_id = :chainId', { chainId })
+    .andWhere('ra.token_address in (:...tokenAddresses)', {
+      tokenAddresses: normalizedTokenAddresses,
+    })
+    .orderBy('ra.token_address', 'ASC')
+    .addOrderBy('ra.created_at', 'DESC')
+    .getMany()
+
+  return new Map(
+    rows.map((row) => [row.tokenAddress.toLowerCase(), row] as const),
+  )
+}
+
+export async function persistRiskAssessments(
+  inputs: PersistRiskAssessmentInput[],
+) {
+  if (inputs.length === 0) return
+
+  await initializeDataSource()
+  const repository = AppDataSource.getRepository(RiskAssessment)
+
+  await repository.insert(
+    inputs.map((input) => ({
+      chainId: input.chainId,
+      tokenAddress: input.tokenAddress.toLowerCase(),
+      decision: input.evaluation.decision,
+      flags: input.evaluation.criticalFlags,
+      reasons: input.evaluation.reasons,
+      badges: [],
+      providerPayload: input.providerPayload,
+    })),
+  )
 }

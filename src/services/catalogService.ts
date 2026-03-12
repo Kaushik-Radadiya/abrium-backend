@@ -217,12 +217,13 @@ async function resolveChainKey(chainId: number) {
   throw buildStatusError(`Chain ${chainId} is not supported by Stargate`, 404);
 }
 
-async function resolveCoinGeckoPlatformId(chainId: number) {
+async function resolveCoinGeckoChainMeta(chainId: number) {
   const chains = await fetchCoinGeckoChains();
-  const platformId = chains.find(
-    (chain) => chain.chainId === chainId,
-  )?.coingeckoId;
-  return platformId ?? null;
+  const chain = chains.find((c) => c.chainId === chainId);
+  return {
+    platformId: chain?.coingeckoId ?? null,
+    nativeCoinId: chain?.nativeCoinId ?? null,
+  };
 }
 
 type MarketData = {
@@ -251,14 +252,22 @@ async function syncTokensByChainId(chainId: number, chainKey: string) {
   >();
   let hasApySyncData = false;
 
-  const platformId = await resolveCoinGeckoPlatformId(chainId).catch(
-    () => null,
+  const { platformId, nativeCoinId } = await resolveCoinGeckoChainMeta(chainId).catch(
+    () => ({ platformId: null, nativeCoinId: null }),
   );
   if (platformId) {
     coinIdByAddress = await fetchCoinGeckoCoinIdsByContracts(
       platformId,
       chainTokens.map((token) => token.address),
     ).catch(() => new Map<string, string>());
+  }
+
+  // Native token (ETH, MATIC, etc.) has address "native" which fails EVM
+  // address validation in fetchCoinGeckoCoinIdsByContracts. Inject its
+  // CoinGecko coin ID directly from the chain metadata instead.
+  const hasNativeToken = chainTokens.some((t) => t.address === 'native');
+  if (hasNativeToken && nativeCoinId) {
+    coinIdByAddress.set('native', nativeCoinId);
   }
 
   const withCoinIds = chainTokens.map((token) => ({
