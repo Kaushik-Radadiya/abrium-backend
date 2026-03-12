@@ -77,9 +77,8 @@ const COINS_MARKET_BATCH_SIZE = 100;
 const COINS_MARKET_CONCURRENCY = 4;
 const CHAIN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
-let chainsCache:
-  | { expiresAt: number; value: CoinGeckoChainMetadata[] }
-  | null = null;
+let chainsCache: { expiresAt: number; value: CoinGeckoChainMetadata[] } | null =
+  null;
 
 function toNonEmptyString(value: unknown) {
   if (typeof value !== 'string') return null;
@@ -455,10 +454,8 @@ export async function fetchCoinGeckoTokenMarketsByCoinIds(coinIds: string[]) {
   const markets = new Map<string, CoinGeckoTokenMarketSnapshot>();
   const batches = chunkItems(normalizedCoinIds, COINS_MARKET_BATCH_SIZE);
   const snapshotsByBatch: CoinGeckoTokenMarketSnapshot[][] =
-    await mapWithConcurrency(
-      batches,
-      COINS_MARKET_CONCURRENCY,
-      (batch) => fetchCoinGeckoTokenMarketsBatch(batch),
+    await mapWithConcurrency(batches, COINS_MARKET_CONCURRENCY, (batch) =>
+      fetchCoinGeckoTokenMarketsBatch(batch),
     );
 
   for (const snapshots of snapshotsByBatch) {
@@ -468,4 +465,71 @@ export async function fetchCoinGeckoTokenMarketsByCoinIds(coinIds: string[]) {
   }
 
   return markets;
+}
+
+type CoinGeckoOnchainTokenApi = {
+  address?: unknown;
+  name?: unknown;
+  symbol?: unknown;
+  decimals?: unknown;
+  image_url?: unknown;
+  coingecko_coin_id?: unknown;
+  price_usd?: unknown;
+  volume_usd?: { h24?: unknown } | null;
+};
+
+export type CoinGeckoOnchainToken = {
+  address: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+  imageUrl: string | null;
+  coingeckoCoinId: string | null;
+  priceUsd: number | null;
+  volume24hUsd: number | null;
+};
+
+function parseOnchainToken(
+  attrs: CoinGeckoOnchainTokenApi,
+  address: string,
+): CoinGeckoOnchainToken | null {
+  const name = toNonEmptyString(attrs.name);
+  const symbol = toNonEmptyString(attrs.symbol);
+  const decimals = toFiniteNumber(attrs.decimals);
+  if (!name || !symbol || decimals === null) return null;
+
+  const rawVol = (attrs.volume_usd as { h24?: unknown } | null)?.h24;
+
+  return {
+    address: address.toLowerCase(),
+    name,
+    symbol,
+    decimals: Math.trunc(decimals),
+    imageUrl: toNonEmptyString(attrs.image_url),
+    coingeckoCoinId: toNonEmptyString(attrs.coingecko_coin_id),
+    priceUsd: toFiniteFloat(attrs.price_usd),
+    volume24hUsd: toFiniteFloat(rawVol),
+  };
+}
+
+export async function fetchCoinGeckoOnchainToken(
+  network: string,
+  address: string,
+): Promise<CoinGeckoOnchainToken | null> {
+  const normalizedAddress = address.trim().toLowerCase();
+  const path = `/onchain/networks/${encodeURIComponent(network)}/tokens/${encodeURIComponent(normalizedAddress)}`;
+
+  try {
+    const payload = await fetchCoinGeckoJson<{
+      data?: { attributes?: CoinGeckoOnchainTokenApi };
+    }>(path);
+
+    const attrs = payload.data?.attributes;
+    if (!attrs) return null;
+
+    return parseOnchainToken(attrs, normalizedAddress);
+  } catch (error) {
+    if (error instanceof CoinGeckoApiError && error.status === 404) return null;
+    throw error;
+  }
 }

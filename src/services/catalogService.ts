@@ -6,11 +6,13 @@ import {
   fetchCoinGeckoCoinIdsByContracts,
   fetchCoinGeckoTokenMarketsByCoinIds,
 } from '../integrations/coingecko.js';
+import { fetchDefiLlamaTokenApyByChain } from '../integrations/defillama.js';
 import {
   fetchStargateChains,
   fetchStargateTokensForChainKeys,
 } from '../integrations/stargate.js';
 import { env } from '../config/env.js';
+import type { SecurityLevel } from '../types/security.js';
 
 const UPSERT_BATCH_SIZE = 500;
 
@@ -26,8 +28,6 @@ export type CatalogChainItem = {
   id: number;
   chainKey: string;
   name: string;
-  rpcUrls: string[];
-  explorerUrl: string;
   nativeSymbol: string;
   logoURI?: string;
   scope: 'production' | 'development';
@@ -45,6 +45,12 @@ export type CatalogTokenItem = {
   priceChange24hPercent?: number | null;
   priceChange7dPercent?: number | null;
   volume24hUsd?: number | null;
+  apy?: number | null;
+  apyPoolId?: string | null;
+  apyUpdatedAt?: string | null;
+  securityLevel?: SecurityLevel | null;
+  securityBadges?: object[] | null;
+  securityUpdatedAt?: string | null;
 };
 
 type CacheMetadata = {
@@ -71,8 +77,6 @@ function mapCatalogChain(entity: CatalogChain): CatalogChainItem {
     id: entity.chainId,
     chainKey: entity.chainKey,
     name: entity.name,
-    rpcUrls: entity.rpcUrls ?? [],
-    explorerUrl: entity.explorerUrl ?? '',
     nativeSymbol: entity.nativeSymbol,
     logoURI: entity.logoUri ?? undefined,
     scope: entity.mainnet ? 'production' : 'development',
@@ -99,6 +103,16 @@ function mapCatalogToken(entity: CatalogToken): CatalogTokenItem {
     priceChange24hPercent: entity.priceChange24hPercent ?? null,
     priceChange7dPercent: entity.priceChange7dPercent ?? null,
     volume24hUsd: entity.volume24hUsd ?? null,
+    apy: entity.apy ?? null,
+    apyPoolId: entity.apyPoolId ?? null,
+    apyUpdatedAt: entity.apyUpdatedAt
+      ? entity.apyUpdatedAt.toISOString()
+      : null,
+    securityLevel: entity.securityLevel ?? null,
+    securityBadges: entity.securityBadges ?? null,
+    securityUpdatedAt: entity.securityUpdatedAt
+      ? entity.securityUpdatedAt.toISOString()
+      : null,
   };
 }
 
@@ -167,17 +181,15 @@ async function syncChainsFromStargate() {
   await AppDataSource.transaction(async (manager) => {
     const repository = manager.getRepository(CatalogChain);
     const rows = remoteChains.map((item) => ({
-      chainId: item.chainId,
-      chainKey: item.chainKey,
-      name: coingeckoByChainId.get(item.chainId)?.name ?? item.name,
-      nativeSymbol: item.nativeSymbol,
-      logoUri: coingeckoByChainId.get(item.chainId)?.logoUri ?? item.logoUri,
-      rpcUrls: item.rpcUrls,
-      explorerUrl: item.explorerUrl,
-      mainnet: item.mainnet,
-      chainType: item.chainType,
-      updatedAt: syncTimestamp,
-    }));
+        chainId: item.chainId,
+        chainKey: item.chainKey,
+        name: coingeckoByChainId.get(item.chainId)?.name ?? item.name,
+        nativeSymbol: item.nativeSymbol,
+        logoUri: coingeckoByChainId.get(item.chainId)?.logoUri ?? item.logoUri,
+        mainnet: item.mainnet,
+        chainType: item.chainType,
+        updatedAt: syncTimestamp,
+      }));
 
     for (const chunk of chunkItems(rows, UPSERT_BATCH_SIZE)) {
       await repository.upsert(chunk, ['chainId']);
@@ -207,13 +219,37 @@ async function resolveChainKey(chainId: number) {
 
 async function resolveCoinGeckoPlatformId(chainId: number) {
   const chains = await fetchCoinGeckoChains();
-  const platformId = chains.find((chain) => chain.chainId === chainId)?.coingeckoId;
+  const platformId = chains.find(
+    (chain) => chain.chainId === chainId,
+  )?.coingeckoId;
   return platformId ?? null;
+}
+
+type MarketData = {
+  priceUsd: number | null;
+  priceChange1hPercent: number | null;
+  priceChange24hPercent: number | null;
+  priceChange7dPercent: number | null;
+  volume24hUsd: number | null;
+};
+
+function getMarketField<K extends keyof MarketData>(
+  marketDataByCoinId: Map<string, MarketData>,
+  coinId: string | null | undefined,
+  key: K,
+): number | null {
+  if (!coinId) return null;
+  return marketDataByCoinId.get(coinId.toLowerCase())?.[key] ?? null;
 }
 
 async function syncTokensByChainId(chainId: number, chainKey: string) {
   const chainTokens = await fetchStargateTokensForChainKeys([chainKey]);
   let coinIdByAddress = new Map<string, string>();
+  let apyByAddress = new Map<
+    string,
+    { apy: number | null; apyPoolId: string | null }
+  >();
+  let hasApySyncData = false;
 
   const platformId = await resolveCoinGeckoPlatformId(chainId).catch(
     () => null,
@@ -235,49 +271,73 @@ async function syncTokensByChainId(chainId: number, chainKey: string) {
       .filter((id): id is string => Boolean(id)),
   );
 
+  try {
+    apyByAddress = await fetchDefiLlamaTokenApyByChain({
+      chainId,
+      addresses: chainTokens.map((token) => token.address),
+    });
+    hasApySyncData = true;
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'DefiLlama APY lookup failed';
+    console.warn(
+      `Catalog token APY sync failed for chain ${chainId}: ${message}`,
+    );
+  }
+
   const syncTimestamp = new Date();
   await AppDataSource.transaction(async (manager) => {
     const repository = manager.getRepository(CatalogToken);
-    const rows = withCoinIds.map((item) => ({
-      chainId,
-      address: item.address,
-      symbol: item.symbol,
-      name: item.name,
-      decimals: item.decimals,
-      logoUri: item.logoUri,
-      coingeckoCoinId: item.coingeckoCoinId,
-      priceUsd:
-        item.coingeckoCoinId &&
-        marketDataByCoinId.has(item.coingeckoCoinId.toLowerCase())
-          ? marketDataByCoinId.get(item.coingeckoCoinId.toLowerCase())
-              ?.priceUsd ?? null
-          : null,
-      priceChange1hPercent:
-        item.coingeckoCoinId &&
-        marketDataByCoinId.has(item.coingeckoCoinId.toLowerCase())
-          ? marketDataByCoinId.get(item.coingeckoCoinId.toLowerCase())
-              ?.priceChange1hPercent ?? null
-          : null,
-      priceChange24hPercent:
-        item.coingeckoCoinId &&
-        marketDataByCoinId.has(item.coingeckoCoinId.toLowerCase())
-          ? marketDataByCoinId.get(item.coingeckoCoinId.toLowerCase())
-              ?.priceChange24hPercent ?? null
-          : null,
-      priceChange7dPercent:
-        item.coingeckoCoinId &&
-        marketDataByCoinId.has(item.coingeckoCoinId.toLowerCase())
-          ? marketDataByCoinId.get(item.coingeckoCoinId.toLowerCase())
-              ?.priceChange7dPercent ?? null
-          : null,
-      volume24hUsd:
-        item.coingeckoCoinId &&
-        marketDataByCoinId.has(item.coingeckoCoinId.toLowerCase())
-          ? marketDataByCoinId.get(item.coingeckoCoinId.toLowerCase())
-              ?.volume24hUsd ?? null
-          : null,
-      updatedAt: syncTimestamp,
-    }));
+    const existingApyByAddress = new Map<
+      string,
+      {
+        apy: number | null;
+        apyPoolId: string | null;
+        apyUpdatedAt: Date | null;
+      }
+    >();
+
+    if (!hasApySyncData) {
+      const existingRows = await repository.find({ where: { chainId } });
+      for (const row of existingRows) {
+        existingApyByAddress.set(row.address.toLowerCase(), {
+          apy: row.apy ?? null,
+          apyPoolId: row.apyPoolId ?? null,
+          apyUpdatedAt: row.apyUpdatedAt ?? null,
+        });
+      }
+    }
+
+    const rows = withCoinIds.map((item) => {
+      const normalizedAddress = item.address.toLowerCase();
+      const syncedApy = apyByAddress.get(normalizedAddress);
+      const existingApy = existingApyByAddress.get(normalizedAddress);
+
+      return {
+        chainId,
+        address: item.address,
+        symbol: item.symbol,
+        name: item.name,
+        decimals: item.decimals,
+        logoUri: item.logoUri,
+        coingeckoCoinId: item.coingeckoCoinId,
+        priceUsd: getMarketField(marketDataByCoinId, item.coingeckoCoinId, 'priceUsd'),
+        priceChange1hPercent: getMarketField(marketDataByCoinId, item.coingeckoCoinId, 'priceChange1hPercent'),
+        priceChange24hPercent: getMarketField(marketDataByCoinId, item.coingeckoCoinId, 'priceChange24hPercent'),
+        priceChange7dPercent: getMarketField(marketDataByCoinId, item.coingeckoCoinId, 'priceChange7dPercent'),
+        volume24hUsd: getMarketField(marketDataByCoinId, item.coingeckoCoinId, 'volume24hUsd'),
+        apy: hasApySyncData
+          ? (syncedApy?.apy ?? null)
+          : (existingApy?.apy ?? null),
+        apyPoolId: hasApySyncData
+          ? (syncedApy?.apyPoolId ?? null)
+          : (existingApy?.apyPoolId ?? null),
+        apyUpdatedAt: hasApySyncData
+          ? syncTimestamp
+          : (existingApy?.apyUpdatedAt ?? null),
+        updatedAt: syncTimestamp,
+      };
+    });
 
     for (const chunk of chunkItems(rows, UPSERT_BATCH_SIZE)) {
       await repository.upsert(chunk, ['chainId', 'address']);

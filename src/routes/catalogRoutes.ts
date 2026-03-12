@@ -4,6 +4,7 @@ import {
   getCatalogChains,
   getCatalogTokens,
 } from '../services/catalogService.js';
+import { importToken } from '../services/importTokenService.js';
 import { errorResponse, successResponse } from '../utils/response.js';
 
 const tokensQuerySchema = z.object({
@@ -66,6 +67,28 @@ catalogRouter.get('/tokens', async (req, res) => {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Catalog tokens lookup failed';
+    return errorResponse(res, message, resolveStatusCode(error));
+  }
+});
+
+const importTokenBodySchema = z.object({
+  chainId: z.coerce.number().int().positive(),
+  address: z.string().min(1),
+});
+
+catalogRouter.post('/import-token', async (req, res) => {
+  try {
+    const body = importTokenBodySchema.parse(req.body);
+    const result = await importToken(body.chainId, body.address);
+    return successResponse(
+      res,
+      result.created ? 'Token imported successfully' : 'Token updated successfully',
+      result.created ? 201 : 200,
+      result.token,
+    );
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Token import failed';
     return errorResponse(res, message, resolveStatusCode(error));
   }
 });

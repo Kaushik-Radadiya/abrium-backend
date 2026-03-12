@@ -20,23 +20,12 @@ riskRouter.get('/token', async (req, res) => {
       chainId: queryParams.chainId,
       tokenAddress: queryParams.tokenAddress,
     })
-    const hasProviderUnavailable =
-      evaluation.flags.includes('provider_unavailable') ||
-      evaluation.warningFlags.includes('provider_unavailable') ||
-      evaluation.badges.some((badge) => badge.id === 'provider_unavailable')
 
     return successResponse(res, 'Token risk fetched successfully', 200, {
       decision: evaluation.decision,
-      flags: evaluation.flags,
+      securityLevel: evaluation.securityLevel,
       criticalFlags: evaluation.criticalFlags,
-      warningFlags: evaluation.warningFlags,
-      trustSignals: evaluation.trustSignals,
       reasons: evaluation.reasons,
-      badges: evaluation.badges,
-      metrics: evaluation.metrics,
-      alertLevel: evaluation.alertLevel,
-      alertTitle: evaluation.alertTitle,
-      alertMessage: evaluation.alertMessage,
     })
   } catch (error) {
     const message =
