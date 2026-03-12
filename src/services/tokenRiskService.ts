@@ -1,123 +1,149 @@
+import { AppDataSource, initializeDataSource } from '../db/dataSource.js'
+import { fetchGoPlusTokenSecurityBatch } from '../integrations/goPlus.js'
+import { evaluateGoPlusRisk, toAbriumTokenSecurity } from './riskPolicyEngine.js'
 import {
-  fetchGoPlusTokenSecurity,
-  GoPlusApiError,
-} from '../integrations/goPlus.js'
-import type { RiskEvaluation } from '../types/security.js'
-import { evaluateGoPlusRisk } from './riskPolicyEngine.js'
-import {
-  findRecentRiskAssessment,
-  persistRiskAssessment,
+  findLatestRiskAssessmentsByTokens,
+  persistRiskAssessments,
 } from '../repositories/riskAssessmentRepository.js'
-import { env } from '../config/env.js'
+import type { RiskEvaluation } from '../types/security.js'
 
-function buildProviderUnavailableEvaluation(
-  chainId: number,
-  tokenAddress: string,
-  detail: string,
-  providerMessage: string | null,
-): RiskEvaluation {
-  const normalizedProviderMessage =
-    typeof providerMessage === 'string' && providerMessage.trim()
-      ? providerMessage.trim()
-      : null
+const TOKEN_RISK_TTL_SECONDS = 24 * 60 * 60
 
+function isCacheFresh(createdAt: Date, ttlSeconds: number) {
+  if (ttlSeconds <= 0) return false
+  return Date.now() - createdAt.getTime() <= ttlSeconds * 1000
+}
+
+function providerUnavailableEvaluation(): RiskEvaluation {
   return {
     decision: 'WARN',
-    score: 50,
-    flags: ['provider_unavailable'],
+    securityLevel: 'caution',
     criticalFlags: [],
-    warningFlags: ['provider_unavailable'],
-    trustSignals: [],
-    reasons: [detail],
+    reasons: ['Security provider is temporarily unavailable.'],
     badges: [
       {
         id: 'provider_unavailable',
-        label: 'Risk Provider Unavailable',
-        detail,
+        label: 'Provider Unavailable',
+        detail: 'Security provider is temporarily unavailable.',
         level: 'warning',
       },
     ],
-    metrics: {
-      buyTaxPercent: null,
-      sellTaxPercent: null,
-      maxDexLiquidityUsd: null,
-      ownershipAbandoned: false,
-    },
-    alertLevel: 'warning',
-    alertTitle: 'Risk data unavailable',
-    alertMessage:
-      normalizedProviderMessage ??
-      'Could not fetch token risk data from provider. Proceed with caution.',
   }
 }
 
-export async function assessTokenRisk(input: {
+async function upsertCatalogTokenSecurity(params: {
   chainId: number
   tokenAddress: string
+  evaluation: RiskEvaluation
+  providerPayload: Record<string, unknown>
+  securityUpdatedAt: Date
 }) {
-  const ttlSeconds = env.GOPLUS_TOKEN_SECURITY_CACHE_TTL_SECONDS
-  const recent = await findRecentRiskAssessment(
-    input.chainId,
-    input.tokenAddress,
-    ttlSeconds,
+  const { securityLevel } = toAbriumTokenSecurity(params.evaluation)
+  const badges = params.evaluation.badges
+
+  const name =
+    typeof params.providerPayload.token_name === 'string' &&
+    params.providerPayload.token_name.trim()
+      ? params.providerPayload.token_name.trim()
+      : 'Unknown'
+  const symbol =
+    typeof params.providerPayload.token_symbol === 'string' &&
+    params.providerPayload.token_symbol.trim()
+      ? params.providerPayload.token_symbol.trim()
+      : params.tokenAddress.slice(0, 6).toUpperCase()
+
+  await AppDataSource.query(
+    `INSERT INTO catalog_tokens
+       (chain_id, address, name, symbol, decimals, security_level, security_badges, security_updated_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, NOW())
+     ON CONFLICT (chain_id, address) DO UPDATE SET
+       security_level      = EXCLUDED.security_level,
+       security_badges     = EXCLUDED.security_badges,
+       security_updated_at = EXCLUDED.security_updated_at,
+       updated_at          = NOW()`,
+    [
+      params.chainId,
+      params.tokenAddress,
+      name,
+      symbol,
+      18,
+      securityLevel,
+      JSON.stringify(badges),
+      params.securityUpdatedAt,
+    ],
   )
+}
 
-  if (recent) {
-    // eslint-disable-next-line no-console
-    console.log('Token risk served from DB cache', {
-      chainId: input.chainId,
-      tokenAddress: input.tokenAddress.toLowerCase(),
-      cachedAt: recent.createdAt,
-    })
-    return evaluateGoPlusRisk(recent.providerPayload as Record<string, unknown>)
-  }
+export async function assessTokenRisk(params: {
+  chainId: number
+  tokenAddress: string
+}): Promise<RiskEvaluation> {
+  await initializeDataSource()
+  const normalizedAddress = params.tokenAddress.trim().toLowerCase()
 
-  let providerPayload: Record<string, unknown> = {}
-  let evaluation: RiskEvaluation
+  const latestByAddress = await findLatestRiskAssessmentsByTokens(
+    params.chainId,
+    [normalizedAddress],
+  )
+  const latestAssessment = latestByAddress.get(normalizedAddress) ?? null
 
-  try {
-    providerPayload = await fetchGoPlusTokenSecurity({
-      chainId: input.chainId,
-      tokenAddress: input.tokenAddress,
-    })
-    evaluation = evaluateGoPlusRisk(providerPayload)
-  } catch (error) {
-    const providerError =
-      error instanceof Error ? error.message : 'Risk provider unavailable'
-    const providerCode = error instanceof GoPlusApiError ? error.code : null
-    const providerMessage =
-      error instanceof GoPlusApiError ? error.providerMessage : null
-    const detail = `GoPlus unavailable for chain ${input.chainId} token ${input.tokenAddress.toLowerCase()}: ${providerError}`
-
-    // eslint-disable-next-line no-console
-    console.warn('Risk provider unavailable; falling back to WARN evaluation', {
-      chainId: input.chainId,
-      tokenAddress: input.tokenAddress.toLowerCase(),
-      providerError,
-      providerCode,
-      providerMessage,
-    })
-
-    providerPayload = {
-      provider: 'goplus',
-      unavailable: true,
-      error: providerError,
-      code: providerCode,
-      message: providerMessage,
-    }
-    evaluation = buildProviderUnavailableEvaluation(
-      input.chainId,
-      input.tokenAddress,
-      detail,
-      providerMessage,
+  if (latestAssessment) {
+    const cachedEvaluation = evaluateGoPlusRisk(
+      latestAssessment.providerPayload as Record<string, unknown>,
     )
+    const isHighRisk = cachedEvaluation.decision === 'BLOCK'
+    if (!isHighRisk && isCacheFresh(latestAssessment.createdAt, TOKEN_RISK_TTL_SECONDS)) {
+      return cachedEvaluation
+    }
   }
 
-  await persistRiskAssessment({
-    chainId: input.chainId,
-    tokenAddress: input.tokenAddress,
+  let payloadByAddress: Map<string, Record<string, unknown>>
+  try {
+    payloadByAddress = await fetchGoPlusTokenSecurityBatch({
+      chainId: params.chainId,
+      tokenAddresses: [normalizedAddress],
+      bypassCache: true,
+    })
+  } catch {
+    if (latestAssessment) {
+      return evaluateGoPlusRisk(
+        latestAssessment.providerPayload as Record<string, unknown>,
+      )
+    }
+    return providerUnavailableEvaluation()
+  }
+
+  const payload = payloadByAddress.get(normalizedAddress)
+  if (!payload) {
+    if (latestAssessment) {
+      return evaluateGoPlusRisk(
+        latestAssessment.providerPayload as Record<string, unknown>,
+      )
+    }
+    return providerUnavailableEvaluation()
+  }
+
+  const evaluation = evaluateGoPlusRisk(payload)
+  const fetchedAt = new Date()
+
+  const isHighRisk = evaluation.decision === 'BLOCK'
+  if (!isHighRisk) {
+    await persistRiskAssessments([
+      {
+        chainId: params.chainId,
+        tokenAddress: normalizedAddress,
+        evaluation,
+        providerPayload: payload,
+      },
+    ])
+  }
+
+  await upsertCatalogTokenSecurity({
+    chainId: params.chainId,
+    tokenAddress: normalizedAddress,
     evaluation,
-    providerPayload,
+    providerPayload: payload,
+    securityUpdatedAt: fetchedAt,
   })
 
   return evaluation
