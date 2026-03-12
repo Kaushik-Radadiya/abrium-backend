@@ -7,7 +7,7 @@ const TOKEN_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/
 
 const tokenRiskQuerySchema = z.object({
   chainId: z.coerce.number().int().positive(),
-  tokenAddress: z.string().regex(TOKEN_ADDRESS_REGEX),
+  tokenAddress: z.union([z.literal('native'), z.string().regex(TOKEN_ADDRESS_REGEX)]),
 })
 
 export const riskRouter = Router()
