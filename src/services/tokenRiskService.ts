@@ -6,6 +6,7 @@ import {
   persistRiskAssessments,
 } from '../repositories/riskAssessmentRepository.js'
 import type { RiskEvaluation } from '../types/security.js'
+import { isBluechipToken, getBluechipEvaluation } from '../config/bluechipTokens.js'
 
 const TOKEN_RISK_TTL_SECONDS = 24 * 60 * 60
 
@@ -80,6 +81,10 @@ export async function assessTokenRisk(params: {
 }): Promise<RiskEvaluation> {
   await initializeDataSource()
   const normalizedAddress = params.tokenAddress.trim().toLowerCase()
+
+  if (isBluechipToken(params.chainId, normalizedAddress)) {
+    return getBluechipEvaluation()
+  }
 
   const latestByAddress = await findLatestRiskAssessmentsByTokens(
     params.chainId,

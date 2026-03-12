@@ -13,6 +13,7 @@ import {
 } from '../integrations/stargate.js';
 import { env } from '../config/env.js';
 import type { SecurityLevel } from '../types/security.js';
+import { isBluechipToken, getBluechipEvaluation } from '../config/bluechipTokens.js';
 
 const UPSERT_BATCH_SIZE = 500;
 
@@ -336,10 +337,12 @@ async function syncTokensByChainId(chainId: number, chainKey: string) {
       }
     }
 
+    const bluechipEval = getBluechipEvaluation();
     const rows = withCoinIds.map((item) => {
       const normalizedAddress = item.address.toLowerCase();
       const syncedApy = apyByAddress.get(normalizedAddress);
       const existingApy = existingApyByAddress.get(normalizedAddress);
+      const isBluechip = isBluechipToken(chainId, normalizedAddress);
 
       return {
         chainId,
@@ -363,6 +366,11 @@ async function syncTokensByChainId(chainId: number, chainKey: string) {
         apyUpdatedAt: hasApySyncData
           ? syncTimestamp
           : (existingApy?.apyUpdatedAt ?? null),
+        ...(isBluechip && {
+          securityLevel: bluechipEval.securityLevel,
+          securityBadges: bluechipEval.badges,
+          securityUpdatedAt: syncTimestamp,
+        }),
         updatedAt: syncTimestamp,
       };
     });
