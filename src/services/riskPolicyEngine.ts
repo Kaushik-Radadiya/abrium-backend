@@ -255,7 +255,9 @@ export function evaluateGoPlusRisk(risk: GoPlusRisk): RiskEvaluation {
       decision: 'BLOCK',
       securityLevel: SECURITY_LEVEL_BY_DECISION['BLOCK'],
       criticalFlags: assessment.criticalFlags,
-      reasons: assessment.reasons,
+      reasons: assessment.reasons.length > 0
+        ? assessment.reasons
+        : ['Critical risk flags detected. This token has been blocked.'],
       badges: assessment.badges,
     };
   }
@@ -265,7 +267,9 @@ export function evaluateGoPlusRisk(risk: GoPlusRisk): RiskEvaluation {
       decision: 'WARN',
       securityLevel: SECURITY_LEVEL_BY_DECISION['WARN'],
       criticalFlags: assessment.criticalFlags,
-      reasons: assessment.reasons,
+      reasons: assessment.reasons.length > 0
+        ? assessment.reasons
+        : ['One or more risk indicators were detected. Proceed with caution.'],
       badges: assessment.badges,
     };
   }
@@ -274,7 +278,9 @@ export function evaluateGoPlusRisk(risk: GoPlusRisk): RiskEvaluation {
     decision: 'ALLOW',
     securityLevel: SECURITY_LEVEL_BY_DECISION['ALLOW'],
     criticalFlags: [],
-    reasons: assessment.reasons,
+    reasons: assessment.reasons.length > 0
+      ? assessment.reasons
+      : ['No risk flags detected. Token passed all security checks.'],
     badges: assessment.badges,
   };
 }
